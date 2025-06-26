@@ -91,22 +91,39 @@ def calculate():
         mode = mode_var.get()
 
         if gas == "Гаряче повітря":
-            T_inside = float(entry_t_inside.get()) + T0
+            T_inside_C = float(entry_t_inside.get())
+            if T_inside_C <= ground_temp:
+                raise ValueError("Температура всередині має бути більшою за температуру на землі.")
+            T_inside = T_inside_C + T0
             rho_gas = 1.225 * T0 / T_inside
             P_inside = rho_gas * 287.05 * T_inside
         else:
             rho_gas = GAS_DENSITY[gas]
+            if rho_gas is None:
+                raise ValueError("Щільність газу не задана.")
             P_inside = P_outside
 
         net_lift_per_m3 = rho_air - rho_gas
+        if net_lift_per_m3 <= 0:
+            raise ValueError("Газ не має підйомної сили на обраній висоті.")
 
         if mode == "payload":
             gas_volume = float(entry_gas_volume.get())
+            if gas_volume <= 0:
+                raise ValueError("Обʼєм газу має бути додатнім.")
             required_volume = required_balloon_volume(gas_volume, ground_temp, P_outside, T_outside)
+
         else:
             desired_payload = float(entry_payload.get())
-            mass_per_m3 = thickness * rho_material * (6 / math.pi) ** (2 / 3)
-            gas_volume = desired_payload / (net_lift_per_m3 - mass_per_m3)
+            if desired_payload <= 0:
+                raise ValueError("Навантаження має бути додатнім.")
+            volume_guess = desired_payload / net_lift_per_m3
+            for _ in range(5):
+                surface_area = (volume_guess * 6 / math.pi) ** (2 / 3)
+                mass_shell = surface_area * thickness * rho_material
+                lift = net_lift_per_m3 * volume_guess
+                volume_guess = desired_payload / net_lift_per_m3 + mass_shell / net_lift_per_m3
+            gas_volume = volume_guess
             required_volume = required_balloon_volume(gas_volume, ground_temp, P_outside, T_outside)
 
         surface_area = (required_volume * 6 / math.pi) ** (2 / 3)
