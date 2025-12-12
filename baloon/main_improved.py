@@ -24,32 +24,64 @@ import os
 if getattr(sys, 'frozen', False):
     # Якщо запущено як exe
     application_path = sys._MEIPASS
+    # Додаємо шлях до модулів baloon
+    baloon_path = os.path.join(application_path, 'baloon')
+    if os.path.exists(baloon_path):
+        sys.path.insert(0, baloon_path)
     sys.path.insert(0, application_path)
+    # Також додаємо батьківську директорію для імпорту baloon як пакету
+    parent_path = os.path.dirname(application_path)
+    if parent_path not in sys.path:
+        sys.path.insert(0, parent_path)
 else:
     # Якщо запущено як скрипт
-    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    current_dir = os.path.dirname(os.path.abspath(__file__))
+    parent_dir = os.path.dirname(current_dir)
+    sys.path.insert(0, current_dir)
+    if parent_dir not in sys.path:
+        sys.path.insert(0, parent_dir)
+
+# Спробуємо різні варіанти імпорту
+try:
+    # Варіант 1: імпорт з пакету baloon (для запуску як модуль)
+    from baloon.gui import BalloonCalculatorGUI
+except ImportError:
+    try:
+        # Варіант 2: прямий імпорт gui (для exe, коли модулі в sys._MEIPASS/baloon)
+        from gui import BalloonCalculatorGUI
+    except ImportError:
+        try:
+            # Варіант 3: імпорт через sys.path
+            import gui
+            BalloonCalculatorGUI = gui.BalloonCalculatorGUI
+        except ImportError as e:
+            print(f"Помилка імпорту: {e}")
+            print(f"sys.path: {sys.path}")
+            print(f"Поточна директорія: {os.getcwd()}")
+            print(f"__file__: {__file__}")
+            if getattr(sys, 'frozen', False):
+                print(f"sys._MEIPASS: {sys._MEIPASS}")
+            import traceback
+            traceback.print_exc()
+            input("Натисніть Enter для виходу...")
+            sys.exit(1)
 
 try:
-    # Спробуємо локальний імпорт (для exe)
-    from gui import BalloonCalculatorGUI
-    print("Запуск покращеного калькулятора аеростатів...")
+    # Використовуємо Rich для красивого виводу, якщо доступний
+    try:
+        from baloon.utils import print_success, print_error
+        print_success("Запуск покращеного калькулятора аеростатів...")
+    except ImportError:
+        print("Запуск покращеного калькулятора аеростатів...")
+    
     app = BalloonCalculatorGUI()
     app.run()
-except ImportError as e:
-    # Спробуємо імпорт з пакету (для запуску як модуль)
-    try:
-        from baloon.gui import BalloonCalculatorGUI
-        print("Запуск покращеного калькулятора аеростатів...")
-        app = BalloonCalculatorGUI()
-        app.run()
-    except ImportError:
-        print(f"Помилка імпорту: {e}")
-        print("Переконайтеся, що всі файли знаходяться в тій самій директорії")
-        import traceback
-        traceback.print_exc()
-        input("Натисніть Enter для виходу...")
 except Exception as e:
-    print(f"Помилка запуску: {e}")
+    try:
+        from baloon.utils import print_error
+        print_error(f"Помилка запуску: {e}")
+    except ImportError:
+        print(f"Помилка запуску: {e}")
     import traceback
     traceback.print_exc()
     input("Натисніть Enter для виходу...") 

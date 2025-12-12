@@ -1,0 +1,90 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "baloon-calculator"
+version = "2.0.0"
+description = "Калькулятор аеростатів з графічним інтерфейсом для розрахунку параметрів повітряних куль"
+readme = "README.md"
+requires-python = ">=3.8"
+license = {text = "MIT"}
+authors = [
+    {name = "Братство дисидентів БРТ"}
+]
+keywords = ["balloon", "aerostat", "calculator", "physics", "tkinter", "gui"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Science/Research",
+    "Intended Audience :: Education",
+    "Topic :: Scientific/Engineering :: Physics",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Operating System :: OS Independent",
+]
+
+dependencies = [
+    "matplotlib>=3.5.0",
+    "numpy>=1.21.0",
+    "pydantic>=2.0.0",
+    "pydantic-settings>=2.0.0",
+    "ttkbootstrap>=1.10.0",
+    "pandas>=1.5.0",
+    "openpyxl>=3.0.0",
+    "plotly>=5.0.0",
+    "scipy>=1.9.0",
+    "rich>=13.0.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0.0",
+    "pytest-cov>=4.0.0",
+    "mypy>=1.0.0",
+    "black>=23.0.0",
+    "flake8>=6.0.0",
+]
+docs = [
+    "mkdocs>=1.5.0",
+    "mkdocs-material>=9.0.0",
+]
+
+[project.scripts]
+baloon-calculator = "baloon.main_improved:main"
+
+[project.urls]
+Homepage = "https://github.com/yourusername/baloon-calculator"
+Documentation = "https://yourusername.github.io/baloon-calculator"
+Repository = "https://github.com/yourusername/baloon-calculator"
+Issues = "https://github.com/yourusername/baloon-calculator/issues"
+
+[tool.setuptools]
+packages = ["baloon", "baloon.analysis", "baloon.gui", "baloon.patterns", "baloon.shapes"]
+
+[tool.setuptools.package-data]
+baloon = ["*.json", "*.md"]
+
+[tool.black]
+line-length = 100
+target-version = ['py38', 'py39', 'py310', 'py311', 'py312', 'py313']
+include = '\.pyi?$'
+
+[tool.mypy]
+python_version = "3.8"
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = false
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+addopts = "-v --tb=short"

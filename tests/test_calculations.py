@@ -294,4 +294,172 @@ class TestCalculateBalloonParameters:
                     mode="payload"
                 )
                 assert results['required_volume'] > results_low['required_volume']
+    
+    def test_sphere_shape(self):
+        """Перевірка сферичної форми"""
+        results = calculate_balloon_parameters(
+            gas_type="Гелій",
+            gas_volume=10,
+            material="TPU",
+            thickness_mm=35,
+            start_height=0,
+            work_height=1000,
+            mode="payload",
+            shape_type="sphere"
+        )
+        
+        assert 'shape_type' in results
+        assert results['shape_type'] == "sphere"
+        assert 'shape_params' in results
+        assert 'radius' in results['shape_params']
+        assert results['radius'] > 0
+    
+    def test_pear_shape(self):
+        """Перевірка грушоподібної форми"""
+        # Тест з заданими параметрами
+        results = calculate_balloon_parameters(
+            gas_type="Гелій",
+            gas_volume=10,
+            material="TPU",
+            thickness_mm=35,
+            start_height=0,
+            work_height=1000,
+            mode="payload",
+            shape_type="pear",
+            shape_params={'pear_height': 3.0}
+        )
+        
+        assert results['shape_type'] == "pear"
+        assert 'shape_params' in results
+        assert 'pear_height' in results['shape_params']
+        assert 'pear_top_radius' in results['shape_params']
+        assert 'pear_bottom_radius' in results['shape_params']
+        assert results['shape_params']['pear_height'] > 0
+        assert results['shape_params']['pear_top_radius'] > 0
+        assert results['shape_params']['pear_bottom_radius'] > 0
+        
+        # Тест без параметрів (автоматичний розрахунок)
+        results2 = calculate_balloon_parameters(
+            gas_type="Гелій",
+            gas_volume=10,
+            material="TPU",
+            thickness_mm=35,
+            start_height=0,
+            work_height=1000,
+            mode="payload",
+            shape_type="pear",
+            shape_params={}
+        )
+        
+        assert results2['shape_type'] == "pear"
+        assert 'pear_height' in results2['shape_params']
+        assert 'pear_top_radius' in results2['shape_params']
+        assert 'pear_bottom_radius' in results2['shape_params']
+    
+    def test_cigar_shape(self):
+        """Перевірка сигароподібної форми"""
+        results = calculate_balloon_parameters(
+            gas_type="Гелій",
+            gas_volume=10,
+            material="TPU",
+            thickness_mm=35,
+            start_height=0,
+            work_height=1000,
+            mode="payload",
+            shape_type="cigar",
+            shape_params={'cigar_radius': 1.0}
+        )
+        
+        assert results['shape_type'] == "cigar"
+        assert 'shape_params' in results
+        assert 'cigar_length' in results['shape_params']
+        assert 'cigar_radius' in results['shape_params']
+        assert results['shape_params']['cigar_length'] > 0
+        assert results['shape_params']['cigar_radius'] > 0
+    
+    def test_pillow_shape(self):
+        """Перевірка форми подушки"""
+        results = calculate_balloon_parameters(
+            gas_type="Гелій",
+            gas_volume=10,
+            material="TPU",
+            thickness_mm=35,
+            start_height=0,
+            work_height=1000,
+            mode="payload",
+            shape_type="pillow",
+            shape_params={'pillow_len': 3.0, 'pillow_wid': 2.0}
+        )
+        
+        assert results['shape_type'] == "pillow"
+        assert 'shape_params' in results
+        assert 'pillow_len' in results['shape_params']
+        assert 'pillow_wid' in results['shape_params']
+        # Товщина розраховується з об'єму, але не повертається як параметр форми
+    
+    def test_extra_mass(self):
+        """Перевірка додаткової маси обладнання"""
+        results_without = calculate_balloon_parameters(
+            gas_type="Гелій",
+            gas_volume=10,
+            material="TPU",
+            thickness_mm=35,
+            start_height=0,
+            work_height=1000,
+            mode="payload",
+            extra_mass=0.0
+        )
+        
+        results_with = calculate_balloon_parameters(
+            gas_type="Гелій",
+            gas_volume=10,
+            material="TPU",
+            thickness_mm=35,
+            start_height=0,
+            work_height=1000,
+            mode="payload",
+            extra_mass=1.0
+        )
+        
+        # З додатковою масою навантаження має бути меншим
+        assert results_with['payload'] < results_without['payload']
+        assert results_with['payload'] == pytest.approx(results_without['payload'] - 1.0, rel=0.01)
+        assert results_with.get('extra_mass', 0) == 1.0
+    
+    def test_seam_factor(self):
+        """Перевірка коефіцієнта втрат через шви"""
+        results_without = calculate_balloon_parameters(
+            gas_type="Гелій",
+            gas_volume=10,
+            material="TPU",
+            thickness_mm=35,
+            start_height=0,
+            work_height=1000,
+            mode="payload",
+            seam_factor=1.0
+        )
+        
+        results_with = calculate_balloon_parameters(
+            gas_type="Гелій",
+            gas_volume=10,
+            material="TPU",
+            thickness_mm=35,
+            start_height=0,
+            work_height=1000,
+            mode="payload",
+            seam_factor=1.1  # +10%
+        )
+        
+        # З коефіцієнтом швів маса оболонки має бути більшою
+        assert results_with['mass_shell'] > results_without['mass_shell']
+        
+        # Ефективна площа поверхні має бути більшою
+        effective_with = results_with.get('effective_surface_area', results_with.get('surface_area', 0))
+        effective_without = results_without.get('effective_surface_area', results_without.get('surface_area', 0))
+        assert effective_with > effective_without
+        
+        # Для гелію втрати газу також мають бути більшими (якщо вони є)
+        if 'gas_loss' in results_with and 'gas_loss' in results_without:
+            if results_without['gas_loss'] > 0:  # Тільки якщо є втрати
+                assert results_with['gas_loss'] > results_without['gas_loss']
 

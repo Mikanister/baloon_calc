@@ -5,19 +5,34 @@
 import math
 from typing import List, Tuple, Dict, Any
 
-from .constants import *
-from .calculations import (
-    air_density_at_height,
-    calculate_hot_air_density,
-    calculate_gas_density_at_altitude,
-    sphere_surface_area,
-    calculate_gas_loss,
-)
+try:
+    from baloon.constants import *
+    from baloon.calculations import (
+        air_density_at_height,
+        calculate_hot_air_density,
+        calculate_gas_density_at_altitude,
+        sphere_surface_area,
+        calculate_gas_loss,
+    )
+except ImportError:
+    # Для сумісності з локальними запусками
+    from constants import *
+    from calculations import (
+        air_density_at_height,
+        calculate_hot_air_density,
+        calculate_gas_density_at_altitude,
+        sphere_surface_area,
+        calculate_gas_loss,
+    )
 
 
 def calculate_optimal_height(gas_type: str, material: str, thickness_mm: float, 
                            gas_volume: float, ground_temp: float = 15, 
-                           inside_temp: float = 100) -> Dict[str, Any]:
+                           inside_temp: float = 100,
+                           shape_type: str = "sphere",
+                           shape_params: dict = None,
+                           extra_mass: float = 0.0,
+                           seam_factor: float = 1.0) -> Dict[str, Any]:
     """
     Розраховує оптимальну висоту польоту для максимального навантаження
     
@@ -46,6 +61,10 @@ def calculate_optimal_height(gas_type: str, material: str, thickness_mm: float,
                 height=height,
                 ground_temp=ground_temp,
                 inside_temp=inside_temp,
+                shape_type=shape_type,
+                shape_params=shape_params,
+                extra_mass=extra_mass,
+                seam_factor=seam_factor,
             )
             if state['net_lift_per_m3'] > 0 and state['payload'] > max_payload:
                 max_payload = state['payload']
@@ -62,7 +81,10 @@ def calculate_optimal_height(gas_type: str, material: str, thickness_mm: float,
 
 def calculate_height_profile(gas_type: str, material: str, thickness_mm: float,
                            gas_volume: float, ground_temp: float = 15,
-                           inside_temp: float = 100, max_height: int = 50000) -> List[Dict[str, Any]]:
+                           inside_temp: float = 100, max_height: int = 50000,
+                           shape_type: str = "sphere", shape_params: dict = None,
+                           extra_mass: float = 0.0,
+                           seam_factor: float = 1.0) -> List[Dict[str, Any]]:
     """
     Розраховує профіль параметрів по висоті
     
@@ -90,6 +112,10 @@ def calculate_height_profile(gas_type: str, material: str, thickness_mm: float,
                 height=height,
                 ground_temp=ground_temp,
                 inside_temp=inside_temp,
+                shape_type=shape_type,
+                shape_params=shape_params,
+                extra_mass=extra_mass,
+                seam_factor=seam_factor,
             )
             profile.append({'height': height, **state})
             if state['net_lift_per_m3'] <= 0:
@@ -103,7 +129,10 @@ def calculate_height_profile(gas_type: str, material: str, thickness_mm: float,
 
 def calculate_material_comparison(gas_type: str, thickness_mm: float, gas_volume: float,
                                 ground_temp: float = 15, inside_temp: float = 100,
-                                height: float = 1000) -> Dict[str, Dict[str, float]]:
+                                height: float = 1000,
+                                shape_type: str = "sphere", shape_params: dict = None,
+                                extra_mass: float = 0.0,
+                                seam_factor: float = 1.0) -> Dict[str, Dict[str, float]]:
     """
     Порівнює різні матеріали оболонки
     
@@ -130,6 +159,10 @@ def calculate_material_comparison(gas_type: str, thickness_mm: float, gas_volume
                 height=height,
                 ground_temp=ground_temp,
                 inside_temp=inside_temp,
+                shape_type=shape_type,
+                shape_params=shape_params,
+                extra_mass=extra_mass,
+                seam_factor=seam_factor,
             )
             if state['net_lift_per_m3'] > 0:
                 radius = ((3 * state['required_volume']) / (4 * math.pi)) ** (1 / 3) if state['required_volume'] > 0 else 0
@@ -167,7 +200,10 @@ def calculate_material_comparison(gas_type: str, thickness_mm: float, gas_volume
 
 def calculate_cost_analysis(material: str, thickness_mm: float, gas_volume: float,
                           gas_type: str, ground_temp: float = 15, 
-                          inside_temp: float = 100, height: float = 1000) -> Dict[str, float]:
+                          inside_temp: float = 100, height: float = 1000,
+                          shape_type: str = "sphere", shape_params: dict = None,
+                          extra_mass: float = 0.0,
+                          seam_factor: float = 1.0) -> Dict[str, float]:
     """
     Розраховує приблизну вартість матеріалів
     
@@ -208,6 +244,8 @@ def calculate_cost_analysis(material: str, thickness_mm: float, gas_volume: floa
             height=height,
             ground_temp=ground_temp,
             inside_temp=inside_temp,
+            shape_type=shape_type,
+            shape_params=shape_params,
         )
         
         if state['net_lift_per_m3'] > 0:
@@ -245,9 +283,17 @@ def _compute_lift_state(
     height: float,
     ground_temp: float,
     inside_temp: float,
+    shape_type: str = "sphere",
+    shape_params: dict = None,
+    extra_mass: float = 0.0,
+    seam_factor: float = 1.0,
 ) -> Dict[str, Any]:
     """Спільний розрахунок параметрів підйомної сили на заданій висоті."""
+    from .calculations import _shape_base_geometry, required_balloon_volume
+    
     thickness = thickness_mm / 1e6
+    shape_params = shape_params or {}
+
     T_outside_C, rho_air, P_outside = air_density_at_height(height, ground_temp)
     T_outside = T_outside_C + T0
 
@@ -264,10 +310,21 @@ def _compute_lift_state(
     payload = lift
 
     if net_lift_per_m3 > 0:
-        required_volume = gas_volume * SEA_LEVEL_PRESSURE / P_outside * T_outside / (ground_temp + T0)
-        surface_area = sphere_surface_area(required_volume)
-        mass_shell = surface_area * thickness * MATERIALS[material][0]
-        payload = lift - mass_shell
+        # Розраховуємо required_volume на висоті
+        # Використовуємо формулу: V_required = V_gas * P_sea / P_outside * T_outside / T_sea
+        T0_K = ground_temp + T0
+        required_volume = gas_volume * SEA_LEVEL_PRESSURE / P_outside * T_outside / T0_K
+        
+        # Розраховуємо геометрію на основі required_volume
+        volume, surface_area, radius, calculated_shape_params = _shape_base_geometry(
+            shape_type, shape_params, target_volume=required_volume
+        )
+        
+        # Враховуємо коефіцієнт швів
+        effective_surface_area = surface_area * seam_factor
+        mass_shell = effective_surface_area * thickness * MATERIALS[material][0]
+        # Враховуємо додаткову масу
+        payload = lift - mass_shell - extra_mass
 
     return {
         'rho_air': rho_air,
@@ -293,7 +350,11 @@ def calculate_max_flight_time(
     ground_temp: float = 15,
     inside_temp: float = 100,
     perm_mult: float = 1.0,
-    min_payload: float = 0.0
+    min_payload: float = 0.0,
+    shape_type: str = "sphere",
+    shape_params: dict = None,
+    extra_mass: float = 0.0,
+    seam_factor: float = 1.0
 ) -> Dict[str, Any]:
     """
     Розраховує максимальний час польоту до втрати мінімального навантаження
@@ -344,7 +405,11 @@ def calculate_max_flight_time(
         inside_temp=inside_temp,
         mode="payload",
         duration=0,
-        perm_mult=perm_mult
+        perm_mult=perm_mult,
+        shape_type=shape_type,
+        shape_params=shape_params,
+        extra_mass=extra_mass,
+        seam_factor=seam_factor,
     )
     
     initial_payload = initial_results['payload']
@@ -355,8 +420,8 @@ def calculate_max_flight_time(
             'message': 'Початкове навантаження вже менше мінімального'
         }
     
-    # Параметри для розрахунку втрат
-    surface_area = initial_results['surface_area']
+    # Параметри для розрахунку втрат (використовуємо ефективну площу з урахуванням швів)
+    surface_area = initial_results.get('effective_surface_area', initial_results['surface_area'])
     permeability = PERMEABILITY.get(material, {}).get(gas_type, 0) * perm_mult
     
     if permeability == 0:
@@ -393,7 +458,7 @@ def calculate_max_flight_time(
         
         final_gas_volume = max(0, gas_volume - gas_loss)
         lift = net_lift_per_m3 * final_gas_volume
-        payload = lift - initial_results['mass_shell']
+        payload = lift - initial_results['mass_shell'] - extra_mass
         
         if payload >= min_payload:
             max_time = test_time

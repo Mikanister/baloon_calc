@@ -50,6 +50,17 @@ DEFAULT_GROUND_TEMP = 15  # °C
 DEFAULT_INSIDE_TEMP = 100  # °C
 DEFAULT_PAYLOAD = 3  # кг
 DEFAULT_GAS_VOLUME = 10  # м³
+DEFAULT_SHAPE_TYPE = "Сфера"
+DEFAULT_PILLOW_LEN = 3.0  # м
+DEFAULT_PILLOW_WID = 2.0  # м
+DEFAULT_PILLOW_HEIGHT = 1.0  # м
+DEFAULT_PEAR_HEIGHT = 3.0  # м - висота груші
+DEFAULT_PEAR_TOP_RADIUS = 1.2  # м - радіус верхньої частини (ширша)
+DEFAULT_PEAR_BOTTOM_RADIUS = 0.6  # м - радіус нижньої частини (вужча)
+DEFAULT_CIGAR_LENGTH = 5.0  # м - загальна довжина сигари
+DEFAULT_CIGAR_RADIUS = 1.0  # м - радіус сигари
+DEFAULT_EXTRA_MASS = 0.0  # кг - додаткова маса обладнання
+DEFAULT_SEAM_FACTOR = 1.05  # множник для площі поверхні через шви (5% додатково)
 
 # Коефіцієнти проникності (м²/(с·Па)) для гелію та водню
 # Джерело: типові довідкові значення для полімерів

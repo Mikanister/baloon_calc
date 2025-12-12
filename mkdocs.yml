@@ -1,0 +1,72 @@
+site_name: Калькулятор аеростатів
+site_description: Документація для калькулятора аеростатів
+site_author: Братство дисидентів БРТ
+site_url: https://yourusername.github.io/baloon-calculator
+
+theme:
+  name: material
+  palette:
+    - scheme: slate
+      primary: blue
+      accent: blue
+      toggle:
+        icon: material/brightness-7
+        name: Перемкнути на світлу тему
+    - scheme: default
+      primary: blue
+      accent: blue
+      toggle:
+        icon: material/brightness-4
+        name: Перемкнути на темну тему
+  features:
+    - navigation.tabs
+    - navigation.sections
+    - navigation.expand
+    - navigation.top
+    - search.suggest
+    - search.highlight
+    - content.code.annotate
+    - content.code.copy
+
+markdown_extensions:
+  - pymdownx.highlight:
+      anchor_linenums: true
+  - pymdownx.inlinehilite
+  - pymdownx.snippets
+  - pymdownx.superfences:
+      custom_fences:
+        - name: mermaid
+          class: mermaid
+          format: !!python/name:pymdownx.superfences.fence_code_format
+  - admonition
+  - pymdownx.details
+  - pymdownx.tabbed:
+      alternate_style: true
+  - tables
+  - attr_list
+  - md_in_html
+
+nav:
+  - Головна: index.md
+  - Встановлення: installation.md
+  - Використання: usage.md
+  - API Документація:
+    - Розрахунки: api/calculations.md
+    - Валідація: api/validators.md
+    - Форми: api/shapes.md
+    - Викрійки: api/patterns.md
+    - Аналіз: api/analysis.md
+  - Приклади: examples.md
+  - Розробка: development.md
+
+plugins:
+  - search
+  - mkdocstrings:
+      handlers:
+        python:
+          paths: [baloon]
+          options:
+            docstring_style: google
+            show_source: true
+            show_root_heading: true
+            show_root_toc_entry: true

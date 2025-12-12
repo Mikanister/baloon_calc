@@ -323,4 +323,90 @@ class TestValidateAllInputs:
                 work_height="1000",
                 duration="20000"  # Занадто велика
             )
+    
+    def test_validate_shape_params_optional(self):
+        """Перевірка валідації опціональних параметрів форми"""
+        from baloon.validators import validate_shape_params
+        
+        # Сфера - немає параметрів
+        result = validate_shape_params("sphere", {})
+        assert result == {}
+        
+        # Груша - опціональні параметри
+        result = validate_shape_params("pear", {})
+        assert result == {}
+        
+        result = validate_shape_params("pear", {"pear_height": "3.0"})
+        assert "pear_height" in result
+        assert result["pear_height"] == 3.0
+        
+        result = validate_shape_params("pear", {"pear_top_radius": "1.2"})
+        assert "pear_top_radius" in result
+        assert result["pear_top_radius"] == 1.2
+        
+        result = validate_shape_params("pear", {"pear_height": "3.0", "pear_top_radius": "1.2", "pear_bottom_radius": "0.6"})
+        assert "pear_height" in result
+        assert "pear_top_radius" in result
+        assert "pear_bottom_radius" in result
+        
+        # Сигара - опціональні параметри
+        result = validate_shape_params("cigar", {})
+        assert result == {}
+        
+        result = validate_shape_params("cigar", {"cigar_length": "5.0"})
+        assert "cigar_length" in result
+        assert result["cigar_length"] == 5.0
+        
+        result = validate_shape_params("cigar", {"cigar_radius": "1.0"})
+        assert "cigar_radius" in result
+        
+        # Подушка - опціональні параметри
+        result = validate_shape_params("pillow", {})
+        assert result == {}
+        
+        result = validate_shape_params("pillow", {"pillow_len": "3.0", "pillow_wid": "2.0"})
+        assert "pillow_len" in result
+        assert "pillow_wid" in result
+    
+    def test_validate_shape_params_invalid_shape(self):
+        """Перевірка обробки невалідної форми"""
+        from baloon.validators import validate_shape_params
+        
+        with pytest.raises(ValidationError, match="Непідтримувана форма"):
+            validate_shape_params("invalid_shape", {})
+    
+    def test_validate_all_inputs_with_shapes(self):
+        """Перевірка валідації з параметрами форми"""
+        # Тест з грушею
+        numbers, strings = validate_all_inputs(
+            gas_type="Гелій",
+            gas_volume="10",
+            material="TPU",
+            thickness="35",
+            start_height="0",
+            work_height="1000",
+            mode="payload",
+            shape_type="pear",
+            shape_params={"pear_height": "3.0"}
+        )
+        
+        assert "pear_height" in numbers
+        assert numbers["pear_height"] == 3.0
+        assert strings["shape_type"] == "pear"
+        
+        # Тест з сигарою
+        numbers2, strings2 = validate_all_inputs(
+            gas_type="Гелій",
+            gas_volume="10",
+            material="TPU",
+            thickness="35",
+            start_height="0",
+            work_height="1000",
+            mode="payload",
+            shape_type="cigar",
+            shape_params={}
+        )
+        
+        assert strings2["shape_type"] == "cigar"
+        # Параметри не обов'язкові, тому можуть бути відсутні
 
