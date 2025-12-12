@@ -3,7 +3,11 @@
 """
 
 from typing import Union, Tuple
-from constants import MATERIALS, GAS_DENSITY
+
+try:
+    from baloon.constants import MATERIALS, GAS_DENSITY
+except ImportError:
+    from constants import MATERIALS, GAS_DENSITY
 
 
 class ValidationError(Exception):

@@ -4,7 +4,8 @@
 
 import math
 from typing import Tuple, Optional
-from constants import *
+
+from .constants import *
 
 
 def air_density_at_height(h: float, ground_temp_C: float) -> Tuple[float, float, float]:
@@ -42,6 +43,48 @@ def calc_stress(p_internal: float, p_external: float, r: float, t: float) -> flo
         return 0.0
     delta_p = max(0, p_internal - p_external)
     return delta_p * r / (2 * t)
+
+
+def calculate_gas_density_at_altitude(gas_type: str, pressure: float, temperature_K: float) -> float:
+    """
+    Розраховує щільність газу на висоті за ідеальним газовим законом
+    
+    Args:
+        gas_type: Тип газу ("Гелій", "Водень", "Гаряче повітря")
+        pressure: Тиск на висоті (Па)
+        temperature_K: Температура на висоті (К)
+    
+    Returns:
+        Щільність газу на висоті (кг/м³)
+    """
+    from constants import GAS_SPECIFIC_CONSTANT
+    
+    if gas_type == "Гаряче повітря":
+        # Для гарячого повітря використовується GAS_CONSTANT
+        return pressure / (GAS_CONSTANT * temperature_K)
+    else:
+        # Для гелію та водню використовуємо питому газову сталу
+        R_specific = GAS_SPECIFIC_CONSTANT.get(gas_type)
+        if R_specific is None:
+            raise ValueError(f"Невідома питома газова стала для {gas_type}")
+        return pressure / (R_specific * temperature_K)
+
+
+def sphere_surface_area(volume: float) -> float:
+    """
+    Розраховує площу поверхні сфери за об'ємом
+    
+    Args:
+        volume: Об'єм сфери (м³)
+    
+    Returns:
+        Площа поверхні (м²)
+    """
+    # Для сфери: V = (4/3)πr³, тому r = (3V/(4π))^(1/3)
+    # S = 4πr² = 4π * (3V/(4π))^(2/3) = (36πV²)^(1/3)
+    if volume <= 0:
+        return 0.0
+    return (36 * math.pi * volume**2) ** (1/3)
 
 
 def required_balloon_volume(gas_volume_ground: float, ground_temp_C: float, 
@@ -115,7 +158,7 @@ def calculate_balloon_parameters(
         gas_type: Тип газу
         gas_volume: Об'єм газу (м³) або бажане навантаження (кг)
         material: Матеріал оболонки
-        thickness_mm: Товщина оболонки (мкм)
+        thickness_mm: Товщина оболонки (мкм, мікрометри)
         start_height: Висота пуску (м)
         work_height: Висота польоту (м)
         ground_temp: Температура на землі (°C)
@@ -135,16 +178,20 @@ def calculate_balloon_parameters(
     T_outside_C, rho_air, P_outside = air_density_at_height(total_height, ground_temp)
     T_outside = T_outside_C + T0
     
-    # Розрахунок щільності газу
+    # Розрахунок щільності газу на висоті
     if gas_type == "Гаряче повітря":
         if inside_temp <= ground_temp:
             raise ValueError("Температура всередині має бути більшою за температуру на землі.")
+        # Для гарячого повітря щільність розраховується від температури всередині
         rho_gas = calculate_hot_air_density(inside_temp)
+        # Внутрішній тиск для гарячого повітря
         P_inside = rho_gas * GAS_CONSTANT * (inside_temp + T0)
     else:
-        rho_gas = GAS_DENSITY[gas_type]
-        if rho_gas is None:
-            raise ValueError("Щільність газу не задана.")
+        # Для гелію та водню щільність змінюється з висотою (тиск і температура)
+        # Використовуємо ідеальний газовий закон: ρ = P/(R_specific * T)
+        rho_gas = calculate_gas_density_at_altitude(gas_type, P_outside, T_outside)
+        # Для гелію/водню внутрішній тиск зазвичай дорівнює зовнішньому
+        # (але можна додати надлишковий тиск пізніше)
         P_inside = P_outside
     
     # Розрахунок підйомної сили
@@ -167,7 +214,7 @@ def calculate_balloon_parameters(
         # Ітеративний розрахунок об'єму
         volume_guess = gas_volume / net_lift_per_m3
         for _ in range(5):
-            surface_area = (volume_guess * 6 / math.pi) ** (2 / 3)
+            surface_area = sphere_surface_area(volume_guess)
             mass_shell = surface_area * thickness * MATERIALS[material][0]
             volume_guess = gas_volume / net_lift_per_m3 + mass_shell / net_lift_per_m3
         
@@ -175,7 +222,7 @@ def calculate_balloon_parameters(
         required_volume = required_balloon_volume(final_gas_volume, ground_temp, P_outside, T_outside)
     
     # Фінальні розрахунки
-    surface_area = (required_volume * 6 / math.pi) ** (2 / 3)
+    surface_area = sphere_surface_area(required_volume)
     mass_shell = surface_area * thickness * MATERIALS[material][0]
     lift = net_lift_per_m3 * final_gas_volume
     payload = lift - mass_shell

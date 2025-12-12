@@ -1,0 +1,47 @@
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.pyc
+.Python
+env/
+venv/
+.venv/
+pip-wheel-metadata/
+
+# Build / dist artifacts
+build/
+dist/
+dist_exe/
+*.spec
+*.egg-info/
+.eggs/
+/htmlcov/
+.coverage*
+coverage.xml
+
+# Logs
+*.log
+
+# OS junk
+.DS_Store
+Thumbs.db
+
+# IDE / tooling
+.idea/
+.vscode/
+.ropeproject/
+.pytest_cache/
+.mypy_cache/
+.cache/
+.ipynb_checkpoints/
+
+# Env files
+.env
+.env.*
+
+# Backups / swaps
+*.bak
+*.swp
+*.swo
+

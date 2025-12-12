@@ -3,10 +3,16 @@
 Централізовані підписи, підказки, дефолти, тексти для GUI калькулятора аеростатів
 """
 
-from constants import (
-    DEFAULT_THICKNESS, DEFAULT_START_HEIGHT, DEFAULT_WORK_HEIGHT,
-    DEFAULT_GROUND_TEMP, DEFAULT_INSIDE_TEMP, DEFAULT_PAYLOAD, DEFAULT_GAS_VOLUME
-)
+try:
+    from baloon.constants import (
+        DEFAULT_THICKNESS, DEFAULT_START_HEIGHT, DEFAULT_WORK_HEIGHT,
+        DEFAULT_GROUND_TEMP, DEFAULT_INSIDE_TEMP, DEFAULT_PAYLOAD, DEFAULT_GAS_VOLUME
+    )
+except ImportError:
+    from constants import (
+        DEFAULT_THICKNESS, DEFAULT_START_HEIGHT, DEFAULT_WORK_HEIGHT,
+        DEFAULT_GROUND_TEMP, DEFAULT_INSIDE_TEMP, DEFAULT_PAYLOAD, DEFAULT_GAS_VOLUME
+    )
 
 # Підписи для полів
 FIELD_LABELS = {
@@ -73,7 +79,11 @@ BUTTON_LABELS = {
     'show_graph': "Показати графік",
     'save_settings': "Зберегти налаштування",
     'clear': "Очистити",
-    'about': "Про програму"
+    'about': "Про програму",
+    'compare_materials': "Порівняти матеріали",
+    'optimal_height': "Оптимальна висота",
+    'flight_time': "Час польоту",
+    'help': "Довідка"
 }
 
 # Тексти для секцій

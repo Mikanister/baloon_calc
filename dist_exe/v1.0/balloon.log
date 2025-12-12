@@ -1,6 +1,0 @@
-2025-06-27 12:23:20,910 [INFO] Початок розрахунку. Вхідні дані: {'payload': '3', 'gas_volume': '10', 'density': '1200', 'thickness': '35', 'start_height': '0', 'work_height': '1000', 'ground_temp': '15', 'inside_temp': '100', 'duration': '24', 'perm_mult': '1'}
-2025-06-27 12:23:20,919 [INFO] Розрахунок успішно завершено.
-2025-06-27 12:26:39,925 [INFO] Початок розрахунку. Вхідні дані: {'payload': '3', 'gas_volume': '10', 'density': '1200', 'thickness': '35', 'start_height': '0', 'work_height': '1000', 'ground_temp': '15', 'inside_temp': '100', 'duration': '24', 'perm_mult': '1'}
-2025-06-27 12:26:39,927 [INFO] Розрахунок успішно завершено.
-2025-06-27 12:26:44,788 [INFO] Початок розрахунку. Вхідні дані: {'payload': '3', 'gas_volume': '10', 'density': '1200', 'thickness': '35', 'start_height': '0', 'work_height': '1000', 'ground_temp': '15', 'inside_temp': '100', 'duration': '24', 'perm_mult': '1'}
-2025-06-27 12:26:44,788 [INFO] Розрахунок успішно завершено.
