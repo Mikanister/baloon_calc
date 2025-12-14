@@ -83,9 +83,9 @@ pip install -e .
 python -m balloon
 ```
 
-#### Варіант 2: Через main_improved.py
+#### Варіант 2: Через __main__.py
 ```bash
-python -m balloon.main_improved
+python -m balloon
 ```
 
 #### Варіант 3: Напряму

@@ -4,22 +4,12 @@
 
 from typing import Dict, Any
 
-try:
-    from balloon.constants import *
-    from balloon.calculations import (
-        air_density_at_height,
-        calculate_hot_air_density,
-        calculate_gas_density_at_altitude,
-        _shape_base_geometry,
-    )
-except ImportError:
-    from constants import *
-    from calculations import (
-        air_density_at_height,
-        calculate_hot_air_density,
-        calculate_gas_density_at_altitude,
-        _shape_base_geometry,
-    )
+from balloon.constants import (
+    T0, GRAVITY, GAS_CONSTANT, SEA_LEVEL_PRESSURE, SEA_LEVEL_AIR_DENSITY, MATERIALS
+)
+from balloon.model.atmosphere import air_density_at_height
+from balloon.model.gas import calculate_hot_air_density, calculate_gas_density_at_altitude
+from balloon.model.shapes import get_shape_dimensions_from_volume
 
 
 def _compute_lift_state(
@@ -60,9 +50,18 @@ def _compute_lift_state(
         required_volume = gas_volume * SEA_LEVEL_PRESSURE / P_outside * T_outside / T0_K
         
         # Розраховуємо геометрію на основі required_volume
-        volume, surface_area, radius, calculated_shape_params = _shape_base_geometry(
-            shape_type, shape_params, target_volume=required_volume
-        )
+        try:
+            volume, surface_area, radius, calculated_shape_params = get_shape_dimensions_from_volume(
+                shape_type, required_volume, shape_params
+            )
+        except (ValueError, TypeError) as e:
+            # Якщо форма не підтримується, використовуємо сферу
+            if shape_type not in ["sphere", "pillow", "pear", "cigar"]:
+                volume, surface_area, radius, calculated_shape_params = get_shape_dimensions_from_volume(
+                    "sphere", required_volume, {}
+                )
+            else:
+                raise
         
         # Враховуємо коефіцієнт швів
         effective_surface_area = surface_area * seam_factor

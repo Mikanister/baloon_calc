@@ -66,6 +66,8 @@ def calculate_gas_loss(
     Returns:
         Втрачений об'єм газу (м³)
     """
+    # Unit conversion: GUI provides duration in hours (h), model uses SI (seconds)
+    # Conversion: 1 hour = 3600 seconds
     t_sec = duration_h * 3600
     Q = permeability * surface_area * delta_p * t_sec / thickness_m
     return Q
@@ -141,6 +143,29 @@ def calculate_balloon_state(
     lift = net_lift_per_m3 * gas_volume
     payload = lift - mass_shell - extra_mass
     
+    # Розраховуємо детальний бюджет маси та підйомної сили
+    from balloon.model.mass_budget import calculate_mass_budget, calculate_lift_budget
+    
+    mass_budget = calculate_mass_budget(
+        gas_volume=gas_volume,
+        gas_density=rho_gas,
+        surface_area=surface_area,
+        thickness_m=thickness_m,
+        material_density=material_density,
+        seam_factor=seam_factor,
+        reinforcements_mass=0.0,  # За замовчуванням немає підсилень
+        payload_mass=payload,
+        safety_margin_percent=0.0,  # За замовчуванням немає запасу
+        extra_mass=extra_mass
+    )
+    
+    lift_budget = calculate_lift_budget(
+        gas_volume=gas_volume,
+        air_density=rho_air,
+        gas_density=rho_gas,
+        mass_budget=mass_budget
+    )
+    
     # Напруга
     stress = calc_stress(P_inside, P_outside, radius, thickness_m)
     stress_limit = get_material_stress_limit(material)
@@ -155,6 +180,8 @@ def calculate_balloon_state(
         'radius': radius,
         'surface_area': surface_area,
         'effective_surface_area': effective_surface_area,
+        'mass_budget': mass_budget.to_dict(),
+        'lift_budget': lift_budget.to_dict(),
         'stress': stress,
         'stress_limit': stress_limit,
         'T_outside_C': T_outside_C,
@@ -207,6 +234,8 @@ def solve_volume_to_payload(
     if gas_volume <= 0:
         raise ValueError("Об'єм газу має бути додатнім.")
     
+    # Unit conversion: GUI provides thickness in micrometers (µm), model uses SI (meters)
+    # Conversion: 1 µm = 1e-6 m
     thickness_m = thickness_um / 1e6
     total_height = start_height + work_height
     
@@ -301,6 +330,8 @@ def solve_payload_to_volume(
     if target_payload <= 0:
         raise ValueError("Навантаження має бути додатнім.")
     
+    # Unit conversion: GUI provides thickness in micrometers (µm), model uses SI (meters)
+    # Conversion: 1 µm = 1e-6 m
     thickness_m = thickness_um / 1e6
     total_height = start_height + work_height
     

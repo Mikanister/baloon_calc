@@ -10,7 +10,7 @@ try:
     from balloon.analysis.base import _compute_lift_state
 except ImportError:
     from constants import MATERIALS, GAS_CONSTANT, T0
-    from analysis.base import _compute_lift_state
+    from balloon.analysis.base import _compute_lift_state
 
 
 def calculate_material_comparison(gas_type: str, thickness_um: float, gas_volume: float,

@@ -4,11 +4,9 @@
 
 import pytest
 import math
-from balloon.calculations import (
-    sphere_surface_area,
-    calculate_gas_density_at_altitude,
-    air_density_at_height
-)
+from balloon.model.atmosphere import air_density_at_height
+from balloon.model.gas import calculate_gas_density_at_altitude
+from balloon.shapes.sphere import sphere_surface_area
 from balloon.constants import (
     GAS_SPECIFIC_CONSTANT,
     SEA_LEVEL_PRESSURE,
@@ -21,46 +19,47 @@ class TestSphereSurfaceArea:
     
     def test_surface_area_formula(self):
         """Перевірка правильності формули площі поверхні"""
-        # Для сфери з об'ємом 1 м³
-        volume = 1.0
-        surface_area = sphere_surface_area(volume)
+        # Для сфери з радіусом 1 м
+        radius = 1.0
+        surface_area = sphere_surface_area(radius)
         
-        # Правильна формула: S = (36πV²)^(1/3)
-        expected = (36 * math.pi * volume**2) ** (1/3)
+        # Правильна формула: S = 4πr²
+        expected = 4 * math.pi * radius**2
         assert surface_area == pytest.approx(expected, rel=1e-10)
         
-        # Альтернативна перевірка через радіус
-        radius = ((3 * volume) / (4 * math.pi)) ** (1/3)
-        expected_alt = 4 * math.pi * radius**2
-        assert surface_area == pytest.approx(expected_alt, rel=1e-10)
+        # Альтернативна перевірка через об'єм
+        volume = (4/3) * math.pi * radius**3
+        expected_from_volume = (36 * math.pi * volume**2) ** (1/3)
+        assert surface_area == pytest.approx(expected_from_volume, rel=1e-10)
     
     def test_surface_area_known_values(self):
         """Перевірка на відомих значеннях"""
-        # Сфера з радіусом 1 м: V = 4.18879 м³, S = 12.566 м²
-        volume = 4.1887902047863905  # (4/3)π
-        surface_area = sphere_surface_area(volume)
+        # Сфера з радіусом 1 м: S = 12.566 м²
+        radius = 1.0
+        surface_area = sphere_surface_area(radius)
         expected = 12.566370614359172  # 4π
         assert surface_area == pytest.approx(expected, rel=1e-5)
         
-        # Сфера з радіусом 2 м: V = 33.51 м³, S = 50.27 м²
-        volume = 33.510321638291124  # (4/3)π * 8
-        surface_area = sphere_surface_area(volume)
+        # Сфера з радіусом 2 м: S = 50.27 м²
+        radius = 2.0
+        surface_area = sphere_surface_area(radius)
         expected = 50.26548245743669  # 4π * 4
         assert surface_area == pytest.approx(expected, rel=1e-5)
     
-    def test_zero_volume(self):
-        """Перевірка при нульовому об'ємі"""
+    def test_zero_radius(self):
+        """Перевірка при нульовому радіусі"""
         assert sphere_surface_area(0) == 0.0
     
     def test_old_vs_new_formula(self):
         """Порівняння старої та нової формули"""
-        volume = 10.0
+        radius = 1.0
+        volume = (4/3) * math.pi * radius**3
         
-        # Стара (неправильна) формула
+        # Стара (неправильна) формула через об'єм
         old_formula = (volume * 6 / math.pi) ** (2 / 3)
         
-        # Нова (правильна) формула
-        new_formula = sphere_surface_area(volume)
+        # Нова (правильна) формула через радіус
+        new_formula = sphere_surface_area(radius)
         
         # Нова формула має давати більший результат
         assert new_formula > old_formula
@@ -169,28 +168,42 @@ class TestLiftCalculationCorrection:
     
     def test_lift_with_corrected_density(self):
         """Перевірка що підйомна сила розраховується правильно"""
-        from balloon.calculations import calculate_balloon_parameters
+        from balloon.model.solve import solve_volume_to_payload
         
         # Розрахунок на рівні моря
-        results_sea = calculate_balloon_parameters(
+        results_sea = solve_volume_to_payload(
             gas_type="Гелій",
-            gas_volume=10,
+            gas_volume=10.0,
             material="TPU",
             thickness_um=35,
-            start_height=0,
-            work_height=0,
-            mode="payload"
+            start_height=0.0,
+            work_height=0.0,
+            ground_temp=15.0,
+            inside_temp=15.0,
+            duration=0.0,
+            perm_mult=1.0,
+            shape_type="sphere",
+            shape_params={},
+            extra_mass=0.0,
+            seam_factor=1.0
         )
         
         # Розрахунок на висоті 10 км
-        results_alt = calculate_balloon_parameters(
+        results_alt = solve_volume_to_payload(
             gas_type="Гелій",
-            gas_volume=10,
+            gas_volume=10.0,
             material="TPU",
             thickness_um=35,
-            start_height=0,
-            work_height=10000,
-            mode="payload"
+            start_height=0.0,
+            work_height=10000.0,
+            ground_temp=15.0,
+            inside_temp=15.0,
+            duration=0.0,
+            perm_mult=1.0,
+            shape_type="sphere",
+            shape_params={},
+            extra_mass=0.0,
+            seam_factor=1.0
         )
         
         # На висоті підйомна сила має бути меншою

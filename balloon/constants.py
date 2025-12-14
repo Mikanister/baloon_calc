@@ -40,7 +40,7 @@ GAS_SPECIFIC_CONSTANT = {
     "Гаряче повітря": GAS_CONSTANT,  # Така ж як для повітря
 }
 
-# Для зворотної сумісності
+# Аліас для зручності
 GAS_DENSITY = GAS_DENSITY_AT_STP
 
 # ============================================================================
@@ -98,7 +98,7 @@ DEFAULT_PAYLOAD = 3  # кг
 DEFAULT_GAS_VOLUME = 10  # м³
 DEFAULT_SHAPE_TYPE = "Сфера"  # Використовує display_name з SHAPES
 
-# Дефолтні параметри форм (для зворотної сумісності)
+# Дефолтні параметри форм
 DEFAULT_PILLOW_LEN = SHAPES["pillow"]["default_params"]["pillow_len"]
 DEFAULT_PILLOW_WID = SHAPES["pillow"]["default_params"]["pillow_wid"]
 DEFAULT_PILLOW_HEIGHT = 1.0  # м (не використовується, але залишено для сумісності)

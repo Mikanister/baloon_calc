@@ -1,23 +1,18 @@
 """
 Модель форм: об'єм, площа поверхні, розміри
+
+Використовує Shape Registry як єдине джерело правди.
 """
 
 from typing import Dict, Any, Optional, Literal, Tuple
 import math
 
-from balloon.shapes import (
-    sphere_volume,
-    sphere_surface_area,
-    sphere_radius_from_volume,
-    pillow_volume,
-    pillow_surface_area,
-    pillow_dimensions_from_volume,
-    pear_volume,
-    pear_surface_area,
-    pear_dimensions_from_volume,
-    cigar_volume,
-    cigar_surface_area,
-    cigar_dimensions_from_volume,
+from balloon.shapes.registry import (
+    get_shape_entry,
+    get_shape_volume as registry_get_volume,
+    get_shape_area as registry_get_area,
+    get_shape_dimensions_from_volume as registry_get_dimensions,
+    validate_shape_params,
 )
 
 
@@ -53,7 +48,7 @@ def get_shape_volume(
     dimensions: Dict[str, float]
 ) -> float:
     """
-    Розраховує об'єм форми
+    Розраховує об'єм форми через Shape Registry
     
     Args:
         shape_type: Тип форми
@@ -62,25 +57,8 @@ def get_shape_volume(
     Returns:
         Об'єм (м³)
     """
-    if shape_type == "sphere":
-        radius = dimensions.get("radius", 0)
-        return sphere_volume(radius)
-    elif shape_type == "pillow":
-        length = dimensions.get("pillow_len", 0)
-        width = dimensions.get("pillow_wid", 0)
-        thickness = dimensions.get("pillow_height", 1.0)
-        return pillow_volume(length, width, thickness)
-    elif shape_type == "pear":
-        height = dimensions.get("pear_height", 0)
-        top_radius = dimensions.get("pear_top_radius", 0)
-        bottom_radius = dimensions.get("pear_bottom_radius", 0)
-        return pear_volume(height, top_radius, bottom_radius)
-    elif shape_type == "cigar":
-        length = dimensions.get("cigar_length", 0)
-        radius = dimensions.get("cigar_radius", 0)
-        return cigar_volume(length, radius)
-    else:
-        raise ValueError(f"Непідтримуваний тип форми: {shape_type}")
+    # Використовуємо реєстр замість if/elif логіки
+    return registry_get_volume(shape_type, dimensions)
 
 
 def get_shape_surface_area(
@@ -88,7 +66,7 @@ def get_shape_surface_area(
     dimensions: Dict[str, float]
 ) -> float:
     """
-    Розраховує площу поверхні форми
+    Розраховує площу поверхні форми через Shape Registry
     
     Args:
         shape_type: Тип форми
@@ -97,24 +75,8 @@ def get_shape_surface_area(
     Returns:
         Площа поверхні (м²)
     """
-    if shape_type == "sphere":
-        radius = dimensions.get("radius", 0)
-        return sphere_surface_area(radius)
-    elif shape_type == "pillow":
-        length = dimensions.get("pillow_len", 0)
-        width = dimensions.get("pillow_wid", 0)
-        return pillow_surface_area(length, width)
-    elif shape_type == "pear":
-        height = dimensions.get("pear_height", 0)
-        top_radius = dimensions.get("pear_top_radius", 0)
-        bottom_radius = dimensions.get("pear_bottom_radius", 0)
-        return pear_surface_area(height, top_radius, bottom_radius)
-    elif shape_type == "cigar":
-        length = dimensions.get("cigar_length", 0)
-        radius = dimensions.get("cigar_radius", 0)
-        return cigar_surface_area(length, radius)
-    else:
-        raise ValueError(f"Непідтримуваний тип форми: {shape_type}")
+    # Використовуємо реєстр замість if/elif логіки
+    return registry_get_area(shape_type, dimensions)
 
 
 def get_shape_dimensions_from_volume(
@@ -123,7 +85,7 @@ def get_shape_dimensions_from_volume(
     partial_params: Optional[Dict[str, float]] = None
 ) -> Tuple[float, float, float, Dict[str, float]]:
     """
-    Розраховує розміри форми на основі об'єму
+    Розраховує розміри форми на основі об'єму через Shape Registry
     
     Args:
         shape_type: Тип форми
@@ -135,53 +97,27 @@ def get_shape_dimensions_from_volume(
     """
     partial_params = partial_params or {}
     
+    # Отримуємо розміри через реєстр
+    dimensions = registry_get_dimensions(shape_type, target_volume, partial_params)
+    
+    # Розраховуємо площу поверхні
+    surface = registry_get_area(shape_type, dimensions)
+    
+    # Обчислюємо характерний радіус
+    entry = get_shape_entry(shape_type)
+    if entry is None:
+        raise ValueError(f"Невідома форма: {shape_type}")
+    
     if shape_type == "sphere":
-        r = sphere_radius_from_volume(target_volume)
-        surface = sphere_surface_area(r)
-        return target_volume, surface, r, {"radius": r}
-    
+        char_r = dimensions.get("radius", 0)
     elif shape_type == "pillow":
-        L = partial_params.get("pillow_len")
-        W = partial_params.get("pillow_wid")
-        L, W, H = pillow_dimensions_from_volume(
-            target_volume,
-            length=float(L) if L else None,
-            width=float(W) if W else None
-        )
-        surface = pillow_surface_area(L, W)
-        char_r = min(L, W) / 2
-        return target_volume, surface, char_r, {"pillow_len": L, "pillow_wid": W}
-    
+        char_r = min(dimensions.get("pillow_len", 0), dimensions.get("pillow_wid", 0)) / 2
     elif shape_type == "pear":
-        H = partial_params.get("pear_height")
-        R_top = partial_params.get("pear_top_radius")
-        R_bottom = partial_params.get("pear_bottom_radius")
-        H, R_top, R_bottom = pear_dimensions_from_volume(
-            target_volume,
-            height=float(H) if H else None,
-            top_radius=float(R_top) if R_top else None,
-            bottom_radius=float(R_bottom) if R_bottom else None
-        )
-        surface = pear_surface_area(H, R_top, R_bottom)
-        char_r = (R_top + R_bottom) / 2
-        return target_volume, surface, char_r, {
-            "pear_height": H,
-            "pear_top_radius": R_top,
-            "pear_bottom_radius": R_bottom
-        }
-    
+        char_r = (dimensions.get("pear_top_radius", 0) + dimensions.get("pear_bottom_radius", 0)) / 2
     elif shape_type == "cigar":
-        L = partial_params.get("cigar_length")
-        R = partial_params.get("cigar_radius")
-        L, R = cigar_dimensions_from_volume(
-            target_volume,
-            length=float(L) if L else None,
-            radius=float(R) if R else None
-        )
-        surface = cigar_surface_area(L, R)
-        char_r = R
-        return target_volume, surface, char_r, {"cigar_length": L, "cigar_radius": R}
-    
+        char_r = dimensions.get("cigar_radius", 0)
     else:
-        raise ValueError(f"Непідтримуваний тип форми: {shape_type}")
+        char_r = 0.0
+    
+    return target_volume, surface, char_r, dimensions
 

@@ -26,7 +26,7 @@ pip install -r requirements.txt
 ### Запуск
 
 ```bash
-python -m balloon.main_improved
+python -m balloon
 ```
 
 ### Тестування

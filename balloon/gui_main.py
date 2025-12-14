@@ -5,10 +5,14 @@
 import tkinter as tk
 try:
     import ttkbootstrap as ttk
-    from ttkbootstrap.constants import *
+    from ttkbootstrap.constants import (
+        SUCCESS, INFO, WARNING, DANGER, PRIMARY, SECONDARY
+    )
     TTKBOOTSTRAP_AVAILABLE = True
 except ImportError:
     from tkinter import ttk
+    # Заглушки для констант, якщо ttkbootstrap недоступний
+    SUCCESS = INFO = WARNING = DANGER = PRIMARY = SECONDARY = ""
     TTKBOOTSTRAP_AVAILABLE = False
 from tkinter import messagebox
 from typing import Dict, Any
@@ -36,17 +40,34 @@ from balloon.analysis import (
     calculate_optimal_height,
     calculate_max_flight_time
 )
-from balloon.constants import *
-from balloon.calculations import calculate_balloon_parameters
+from balloon.constants import (
+    MATERIALS, T0, GRAVITY, GAS_CONSTANT, SEA_LEVEL_PRESSURE, SEA_LEVEL_AIR_DENSITY,
+    GAS_DENSITY, GAS_DENSITY_AT_STP,
+    DEFAULT_THICKNESS, DEFAULT_START_HEIGHT, DEFAULT_WORK_HEIGHT,
+    DEFAULT_GROUND_TEMP, DEFAULT_INSIDE_TEMP, DEFAULT_PAYLOAD, DEFAULT_GAS_VOLUME,
+    DEFAULT_SHAPE_TYPE, SHAPES
+)
+from balloon.model.solve import solve_volume_to_payload, solve_payload_to_volume
 from balloon.validators import validate_all_inputs, ValidationError
 from balloon.labels import FIELD_LABELS, FIELD_TOOLTIPS, FIELD_DEFAULTS, COMBOBOX_VALUES, ABOUT_TEXT, BUTTON_LABELS, SECTION_LABELS, PERM_MULT_HINT
 from balloon.help_texts import HELP_FORMULAS, HELP_PARAMETERS, HELP_SAFETY, HELP_EXAMPLES, HELP_FAQ, ABOUT_TEXT_EXTENDED
 from balloon.patterns import generate_pattern_from_shape, calculate_seam_length
+from balloon.patterns.profile_based import generate_pattern_from_shape_profile
+from balloon.gui.shape_params_helper import get_shape_params_from_sources, get_shape_code_from_sources
+from balloon.gui.matplotlib_3d_fallback import create_matplotlib_3d_fallback
 
 import logging
+import sys
+
+# Визначаємо шлях для логів (в exe режимі використовуємо тимчасову папку)
+if getattr(sys, 'frozen', False):
+    # PyInstaller створює тимчасову папку в sys._MEIPASS
+    log_path = os.path.join(os.path.dirname(sys.executable), 'balloon.log')
+else:
+    log_path = 'balloon.log'
 
 logging.basicConfig(
-    filename='balloon.log',
+    filename=log_path,
     level=logging.INFO,
     format='%(asctime)s [%(levelname)s] %(message)s',
     encoding='utf-8'
@@ -74,6 +95,7 @@ class BalloonCalculatorGUI:
         self.dark_mode = True
         # Змінні
         self.mode_var = tk.StringVar(value="payload")
+        self.advanced_mode_var = tk.BooleanVar(value=False)  # False = Basic mode, True = Advanced mode
         self.material_var = tk.StringVar(value="TPU")
         self.gas_var = tk.StringVar(value="Гелій")
         self.shape_var = tk.StringVar(value="Сфера")
@@ -94,6 +116,9 @@ class BalloonCalculatorGUI:
         self.load_settings()
         # Викликаємо update_fields для правильної початкової видимості полів
         self.update_fields()
+        
+        # Налаштування автозбереження при закритті
+        self.root.protocol("WM_DELETE_WINDOW", self.on_close)
     
     def setup_dark_theme(self):
         """Налаштування темної теми"""
@@ -243,6 +268,22 @@ class BalloonCalculatorGUI:
             row=row, column=0, columnspan=2, sticky="ew", pady=10
         )
         row += 1
+        # Перемикач Basic/Advanced mode
+        ttk.Label(parent, text="Режим інтерфейсу:", font=("Segoe UI", 9)).grid(
+            row=row, column=0, sticky="w"
+        )
+        row += 1
+        ttk.Checkbutton(
+            parent, text="Розширений режим (Advanced)",
+            variable=self.advanced_mode_var,
+            command=self.update_fields
+        ).grid(row=row, column=1, sticky="w")
+        row += 1
+        # Роздільник
+        ttk.Separator(parent, orient="horizontal").grid(
+            row=row, column=0, columnspan=2, sticky="ew", pady=10
+        )
+        row += 1
         return row
     
     def create_header_section(self, parent):
@@ -371,11 +412,17 @@ class BalloonCalculatorGUI:
             values=list(GAS_DENSITY.keys()),
             textvariable=self.gas_var
         )
+        # Advanced fields (приховуються в Basic mode)
         row = self._add_entry_row(parent, 'duration', FIELD_LABELS['duration'], row, FIELD_DEFAULTS['duration'])
+        self.advanced_fields = ['duration', 'perm_mult', 'extra_mass', 'seam_factor']
+        self.advanced_hints = {}
+        
         row = self._add_entry_row(parent, 'perm_mult', FIELD_LABELS['perm_mult'], row, FIELD_DEFAULTS['perm_mult'], width=8)
         perm_mult_hint = ttk.Label(parent, text=PERM_MULT_HINT, font=("Segoe UI", 9), foreground="#4a90e2")
         perm_mult_hint.grid(row=row, column=0, columnspan=2, sticky="w", pady=(2, 5))
+        self.advanced_hints['perm_mult'] = perm_mult_hint
         row += 1
+        
         row = self._add_entry_row(parent, 'extra_mass', FIELD_LABELS['extra_mass'], row, FIELD_DEFAULTS['extra_mass'])
         row = self._add_entry_row(parent, 'seam_factor', FIELD_LABELS['seam_factor'], row, FIELD_DEFAULTS['seam_factor'], width=8)
         row += 1
@@ -521,69 +568,13 @@ class BalloonCalculatorGUI:
             # Логування для діагностики
             logging.info(f"update_3d_preview: shape_display={shape_display}, shape_code={shape_code}")
             
-            # Отримуємо параметри форми з розділу викрійок або з останнього розрахунку
-            shape_params = {}
-            
-            # Спочатку спробуємо отримати з останнього розрахунку
-            if hasattr(self, 'last_calculation_results'):
-                results = self.last_calculation_results
-                calc_shape_code = results.get('shape_type', '')
-                if calc_shape_code == shape_code:
-                    shape_params = results.get('shape_params', {}) or {}
-                    # Додатково перевіряємо, чи є параметри в results напряму
-                    if shape_code == 'pear' and not shape_params:
-                        shape_params = {
-                            'pear_height': results.get('pear_height', 3.0),
-                            'pear_top_radius': results.get('pear_top_radius', 1.2),
-                            'pear_bottom_radius': results.get('pear_bottom_radius', 0.6)
-                        }
-                    elif shape_code == 'cigar' and not shape_params:
-                        shape_params = {
-                            'cigar_length': results.get('cigar_length', 5.0),
-                            'cigar_radius': results.get('cigar_radius', 1.0)
-                        }
-            
-            # Якщо немає параметрів, спробуємо з полів вводу розрахунків
-            if not shape_params:
-                if shape_code == 'sphere':
-                    if hasattr(self, 'last_calculation_results') and 'radius' in self.last_calculation_results:
-                        radius = self.last_calculation_results['radius']
-                    else:
-                        try:
-                            gas_volume = float(self.entries.get('gas_volume', ttk.Entry()).get() or "1.0")
-                            from balloon.shapes import sphere_radius_from_volume
-                            radius = sphere_radius_from_volume(gas_volume)
-                        except:
-                            radius = 1.0
-                    shape_params = {'radius': radius}
-                    
-                elif shape_code == 'pillow':
-                    try:
-                        shape_params = {
-                            'pillow_len': float(self.entries.get('pillow_len', ttk.Entry()).get() or "3.0"),
-                            'pillow_wid': float(self.entries.get('pillow_wid', ttk.Entry()).get() or "2.0")
-                        }
-                    except:
-                        shape_params = {'pillow_len': 3.0, 'pillow_wid': 2.0}
-                        
-                elif shape_code == 'pear':
-                    try:
-                        shape_params = {
-                            'pear_height': float(self.entries.get('pear_height', ttk.Entry()).get() or "3.0"),
-                            'pear_top_radius': float(self.entries.get('pear_top_radius', ttk.Entry()).get() or "1.2"),
-                            'pear_bottom_radius': float(self.entries.get('pear_bottom_radius', ttk.Entry()).get() or "0.6")
-                        }
-                    except:
-                        shape_params = {'pear_height': 3.0, 'pear_top_radius': 1.2, 'pear_bottom_radius': 0.6}
-                        
-                elif shape_code == 'cigar':
-                    try:
-                        shape_params = {
-                            'cigar_length': float(self.entries.get('cigar_length', ttk.Entry()).get() or "5.0"),
-                            'cigar_radius': float(self.entries.get('cigar_radius', ttk.Entry()).get() or "1.0")
-                        }
-                    except:
-                        shape_params = {'cigar_length': 5.0, 'cigar_radius': 1.0}
+            # Отримуємо параметри форми через допоміжну функцію
+            shape_params = get_shape_params_from_sources(
+                shape_code=shape_code,
+                entries=self.entries,
+                last_calculation_results=getattr(self, 'last_calculation_results', None),
+                current_pattern=getattr(self, 'current_pattern', None)
+            )
             
             # Малюємо модель
             import numpy as np
@@ -618,13 +609,24 @@ class BalloonCalculatorGUI:
         self.preview_ax.set_zticklabels([])
         
         if shape_code == 'sphere':
-            radius = shape_params.get('radius', 1.0)
-            u = np.linspace(0, 2 * np.pi, 20)
-            v = np.linspace(0, np.pi, 20)
-            x = radius * np.outer(np.cos(u), np.sin(v))
-            y = radius * np.outer(np.sin(u), np.sin(v))
-            z = radius * np.outer(np.ones(np.size(u)), np.cos(v))
-            self.preview_ax.plot_surface(x, y, z, color='#4a90e2', alpha=0.7, edgecolor='#2a5a9a', linewidth=0.3)
+            # Використовуємо profile-based mesh для узгодженості
+            try:
+                from balloon.shapes.profile import get_shape_profile
+                profile = get_shape_profile('sphere', shape_params)
+                if profile:
+                    x, y, z = profile.generate_mesh(num_theta=20, num_z=20, center_at_origin=False)
+                    self.preview_ax.plot_surface(x, y, z, color='#4a90e2', alpha=0.7, edgecolor='#2a5a9a', linewidth=0.3)
+                else:
+                    raise ValueError("Не вдалося створити профіль")
+            except Exception:
+                # Fallback на просту апроксимацію
+                radius = shape_params.get('radius', 1.0)
+                u = np.linspace(0, 2 * np.pi, 20)
+                v = np.linspace(0, np.pi, 20)
+                x = radius * np.outer(np.cos(u), np.sin(v))
+                y = radius * np.outer(np.sin(u), np.sin(v))
+                z = radius * np.outer(np.ones(np.size(u)), np.cos(v))
+                self.preview_ax.plot_surface(x, y, z, color='#4a90e2', alpha=0.7, edgecolor='#2a5a9a', linewidth=0.3)
             
         elif shape_code == 'pillow':
             length = shape_params.get('pillow_len', 3.0)
@@ -651,56 +653,63 @@ class BalloonCalculatorGUI:
             self.preview_ax.plot_surface(x, y, z, color='#4a90e2', alpha=0.7, edgecolor='#2a5a9a', linewidth=0.3)
             
         elif shape_code == 'pear':
-            height = shape_params.get('pear_height', 3.0)
-            top_radius = shape_params.get('pear_top_radius', 1.2)
-            bottom_radius = shape_params.get('pear_bottom_radius', 0.6)
-            
-            u = np.linspace(0, 2 * np.pi, 20)
-            v = np.linspace(0, 1, 20)
-            u_grid, v_grid = np.meshgrid(u, v)
-            
-            r_at_height = top_radius * (1 - v_grid) + bottom_radius * v_grid
-            
-            x = r_at_height * np.cos(u_grid)
-            y = r_at_height * np.sin(u_grid)
-            z = height * v_grid
-            
-            self.preview_ax.plot_surface(x, y, z, color='#4a90e2', alpha=0.7, edgecolor='#2a5a9a', linewidth=0.3)
+            # Використовуємо profile-based mesh для узгодженості
+            try:
+                from balloon.shapes.profile import get_shape_profile
+                profile = get_shape_profile('pear', shape_params)
+                if profile:
+                    x, y, z = profile.generate_mesh(num_theta=20, num_z=20, center_at_origin=False)
+                    self.preview_ax.plot_surface(x, y, z, color='#4a90e2', alpha=0.7, edgecolor='#2a5a9a', linewidth=0.3)
+                else:
+                    raise ValueError("Не вдалося створити профіль")
+            except Exception:
+                # Fallback на просту апроксимацію (лінійна інтерполяція)
+                height = shape_params.get('pear_height', 3.0)
+                top_radius = shape_params.get('pear_top_radius', 1.2)
+                bottom_radius = shape_params.get('pear_bottom_radius', 0.6)
+                u = np.linspace(0, 2 * np.pi, 20)
+                v = np.linspace(0, 1, 20)
+                u_grid, v_grid = np.meshgrid(u, v)
+                r_at_height = top_radius * (1 - v_grid) + bottom_radius * v_grid
+                x = r_at_height * np.cos(u_grid)
+                y = r_at_height * np.sin(u_grid)
+                z = height * v_grid
+                self.preview_ax.plot_surface(x, y, z, color='#4a90e2', alpha=0.7, edgecolor='#2a5a9a', linewidth=0.3)
             
         elif shape_code == 'cigar':
-            length = shape_params.get('cigar_length', 5.0)
-            radius = shape_params.get('cigar_radius', 1.0)
-            
-            cylinder_length = max(0, length - 2 * radius)
-            
-            # Циліндрична частина
-            if cylinder_length > 0:
-                u_cyl = np.linspace(0, 2 * np.pi, 20)
-                z_cyl = np.linspace(radius, length - radius, 10)
-                u_grid_cyl, z_grid_cyl = np.meshgrid(u_cyl, z_cyl)
-                
-                x_cyl = radius * np.cos(u_grid_cyl)
-                y_cyl = radius * np.sin(u_grid_cyl)
-                z_cyl = z_grid_cyl
-                
-                self.preview_ax.plot_surface(x_cyl, y_cyl, z_cyl, color='#4a90e2', alpha=0.7, edgecolor='#2a5a9a', linewidth=0.3)
-            
-            # Півсферичні кінці
-            u = np.linspace(0, 2 * np.pi, 20)
-            v = np.linspace(0, np.pi / 2, 10)
-            u_grid, v_grid = np.meshgrid(u, v)
-            
-            # Нижній кінець
-            x1 = radius * np.cos(u_grid) * np.sin(v_grid)
-            y1 = radius * np.sin(u_grid) * np.sin(v_grid)
-            z1 = radius * (1 - np.cos(v_grid))
-            self.preview_ax.plot_surface(x1, y1, z1, color='#4a90e2', alpha=0.7, edgecolor='#2a5a9a', linewidth=0.3)
-            
-            # Верхній кінець
-            x2 = radius * np.cos(u_grid) * np.sin(v_grid)
-            y2 = radius * np.sin(u_grid) * np.sin(v_grid)
-            z2 = (length - radius) + radius * np.cos(v_grid)
-            self.preview_ax.plot_surface(x2, y2, z2, color='#4a90e2', alpha=0.7, edgecolor='#2a5a9a', linewidth=0.3)
+            # Використовуємо profile-based mesh для узгодженості
+            try:
+                from balloon.shapes.profile import get_shape_profile
+                profile = get_shape_profile('cigar', shape_params)
+                if profile:
+                    x, y, z = profile.generate_mesh(num_theta=20, num_z=20, center_at_origin=False)
+                    self.preview_ax.plot_surface(x, y, z, color='#4a90e2', alpha=0.7, edgecolor='#2a5a9a', linewidth=0.3)
+                else:
+                    raise ValueError("Не вдалося створити профіль")
+            except Exception:
+                # Fallback на просту апроксимацію
+                length = shape_params.get('cigar_length', 5.0)
+                radius = shape_params.get('cigar_radius', 1.0)
+                cylinder_length = max(0, length - 2 * radius)
+                if cylinder_length > 0:
+                    u_cyl = np.linspace(0, 2 * np.pi, 20)
+                    z_cyl = np.linspace(radius, length - radius, 10)
+                    u_grid_cyl, z_grid_cyl = np.meshgrid(u_cyl, z_cyl)
+                    x_cyl = radius * np.cos(u_grid_cyl)
+                    y_cyl = radius * np.sin(u_grid_cyl)
+                    z_cyl = z_grid_cyl
+                    self.preview_ax.plot_surface(x_cyl, y_cyl, z_cyl, color='#4a90e2', alpha=0.7, edgecolor='#2a5a9a', linewidth=0.3)
+                u = np.linspace(0, 2 * np.pi, 20)
+                v = np.linspace(0, np.pi / 2, 10)
+                u_grid, v_grid = np.meshgrid(u, v)
+                x1 = radius * np.cos(u_grid) * np.sin(v_grid)
+                y1 = radius * np.sin(u_grid) * np.sin(v_grid)
+                z1 = radius * (1 - np.cos(v_grid))
+                self.preview_ax.plot_surface(x1, y1, z1, color='#4a90e2', alpha=0.7, edgecolor='#2a5a9a', linewidth=0.3)
+                x2 = radius * np.cos(u_grid) * np.sin(v_grid)
+                y2 = radius * np.sin(u_grid) * np.sin(v_grid)
+                z2 = (length - radius) + radius * np.cos(v_grid)
+                self.preview_ax.plot_surface(x2, y2, z2, color='#4a90e2', alpha=0.7, edgecolor='#2a5a9a', linewidth=0.3)
         
         # Налаштування масштабу в залежності від форми
         if shape_code == 'sphere':
@@ -800,49 +809,72 @@ class BalloonCalculatorGUI:
         self.update_fields()
     
     def validate_field(self, field_name):
-        """Валідація поля в реальному часі"""
+        """Валідація поля в реальному часі з показом причини помилки"""
         if field_name not in self.entries:
             return
         
         entry = self.entries[field_name]
         value = entry.get()
         
-        # Скидаємо колір
+        # Скидаємо колір та повідомлення
         entry.configure(style='TEntry')
+        error_msg = None
         
         if not value:
             return
         
         try:
-            float(value)
+            num_value = float(value)
             # Валідація додаткових обмежень
             if field_name == 'thickness':
-                if not (1 <= float(value) <= 1000):
+                if not (1 <= num_value <= 1000):
                     entry.configure(style='Invalid.TEntry')
+                    error_msg = "Товщина: 1…1000 мкм"
             elif field_name in ['start_height', 'work_height']:
-                if float(value) < 0:
+                if num_value < 0:
                     entry.configure(style='Invalid.TEntry')
+                    error_msg = f"{FIELD_LABELS.get(field_name, field_name)}: ≥ 0 м"
             elif field_name == 'ground_temp':
-                if not (-50 <= float(value) <= 50):
+                if not (-50 <= num_value <= 50):
                     entry.configure(style='Invalid.TEntry')
+                    error_msg = "Температура на землі: -50…50 °C"
             elif field_name == 'inside_temp':
-                if not (0 <= float(value) <= 500):
+                if not (0 <= num_value <= 500):
                     entry.configure(style='Invalid.TEntry')
+                    error_msg = "Температура всередині: 0…500 °C"
             elif field_name == 'extra_mass':
-                if float(value) < 0:
+                if num_value < 0:
                     entry.configure(style='Invalid.TEntry')
+                    error_msg = "Додаткова маса: ≥ 0 кг"
             elif field_name == 'seam_factor':
-                if not (1.0 <= float(value) <= 2.0):
+                if not (1.0 <= num_value <= 2.0):
                     entry.configure(style='Invalid.TEntry')
+                    error_msg = "Коефіцієнт швів: 1.0…2.0"
+            elif field_name == 'perm_mult':
+                if num_value <= 0:
+                    entry.configure(style='Invalid.TEntry')
+                    error_msg = "Множник проникності: > 0"
         except ValueError:
             entry.configure(style='Invalid.TEntry')
+            error_msg = "Повинно бути числом"
+        
+        # Показуємо повідомлення про помилку в статусі
+        if hasattr(self, 'status_label'):
+            if error_msg:
+                self.status_label.config(text=f"Помилка: {error_msg}", foreground="#ff6b6b")
+            else:
+                # Скидаємо статус, якщо поле валідне
+                if not any(self.entries.get(f, tk.Entry()).cget('style') == 'Invalid.TEntry' 
+                          for f in self.entries.keys()):
+                    self.status_label.config(text="Статус: очікує результат", foreground="#4a90e2")
         
         # Налаштування стилю для невалідних значень
         try:
             style = ttk.Style()
             style.configure('Invalid.TEntry', fieldbackground='#ffcccc')
-        except:
-            pass
+        except Exception as e:
+            # Не критично, якщо не вдалося налаштувати стиль
+            logging.debug(f"Не вдалося налаштувати стиль Invalid.TEntry: {e}")
         
     def update_density(self, *args):
         """Оновлення щільності при зміні матеріалу"""
@@ -855,6 +887,7 @@ class BalloonCalculatorGUI:
         gas = self.gas_var.get()
         hot_air = gas == "Гаряче повітря"
         is_payload_mode = self.mode_var.get() == "payload"
+        is_advanced_mode = self.advanced_mode_var.get()  # True = Advanced, False = Basic
         shape_display = self.entries['shape_type'].get()
         shape_code = self.shape_display_to_code.get(shape_display, 'sphere')
         
@@ -924,6 +957,21 @@ class BalloonCalculatorGUI:
         elif shape_code == "cigar":
             show_field('cigar_length'); show_field('cigar_radius')
         
+        # Показуємо/приховуємо advanced поля
+        if is_advanced_mode:
+            # Advanced mode: показуємо advanced поля
+            for key in getattr(self, 'advanced_fields', []):
+                show_field(key)
+            # Показуємо підказки для advanced полів
+            for hint in getattr(self, 'advanced_hints', {}).values():
+                hint.grid()
+        else:
+            # Basic mode: приховуємо advanced поля
+            for key in getattr(self, 'advanced_fields', []):
+                hide_field(key)
+            # Приховуємо підказки для advanced полів
+            for hint in getattr(self, 'advanced_hints', {}).values():
+                hint.grid_remove()
             
     def calculate(self):
         """Виконання розрахунків"""
@@ -994,29 +1042,48 @@ class BalloonCalculatorGUI:
                 payload_val = self.entries['payload'].get()
                 try:
                     gas_volume_for_calc = float(payload_val) if payload_val else 0
-                except:
+                except (ValueError, TypeError) as e:
+                    logging.debug(f"Не вдалося конвертувати payload_val '{payload_val}': {e}")
                     gas_volume_for_calc = 0
             else:
                 # В режимі "payload" використовуємо gas_volume
                 gas_volume_for_calc = validated_numbers.get('gas_volume', 0)
             
-            results = calculate_balloon_parameters(
-                gas_type=validated_strings['gas_type'],
-                gas_volume=gas_volume_for_calc,
-                material=validated_strings['material'],
-                thickness_um=validated_numbers['thickness'],
-                start_height=validated_numbers['start_height'],
-                work_height=validated_numbers['work_height'],
-                ground_temp=validated_numbers['ground_temp'],
-                inside_temp=validated_numbers['inside_temp'],
-                duration=validated_numbers['duration'],
-                perm_mult=perm_mult,
-                mode=validated_strings['mode'],
-                shape_type=shape_code,
-                shape_params=validated_shape_params,
-                extra_mass=validated_numbers.get('extra_mass', 0.0),
-                seam_factor=validated_numbers.get('seam_factor', 1.0),
-            )
+            # Використовуємо model.solve для розрахунків
+            if validated_strings['mode'] == "payload":
+                results = solve_volume_to_payload(
+                    gas_type=validated_strings['gas_type'],
+                    gas_volume=gas_volume_for_calc,
+                    material=validated_strings['material'],
+                    thickness_um=validated_numbers['thickness'],
+                    start_height=validated_numbers['start_height'],
+                    work_height=validated_numbers['work_height'],
+                    ground_temp=validated_numbers['ground_temp'],
+                    inside_temp=validated_numbers['inside_temp'],
+                    duration=validated_numbers['duration'],
+                    perm_mult=perm_mult,
+                    shape_type=shape_code,
+                    shape_params=validated_shape_params,
+                    extra_mass=validated_numbers.get('extra_mass', 0.0),
+                    seam_factor=validated_numbers.get('seam_factor', 1.0),
+                )
+            else:
+                results = solve_payload_to_volume(
+                    gas_type=validated_strings['gas_type'],
+                    target_payload=validated_numbers.get('payload', 0.0),
+                    material=validated_strings['material'],
+                    thickness_um=validated_numbers['thickness'],
+                    start_height=validated_numbers['start_height'],
+                    work_height=validated_numbers['work_height'],
+                    ground_temp=validated_numbers['ground_temp'],
+                    inside_temp=validated_numbers['inside_temp'],
+                    duration=validated_numbers['duration'],
+                    perm_mult=perm_mult,
+                    shape_type=shape_code,
+                    shape_params=validated_shape_params,
+                    extra_mass=validated_numbers.get('extra_mass', 0.0),
+                    seam_factor=validated_numbers.get('seam_factor', 1.0),
+                )
             
             # Розрахунок максимального часу польоту для гелію/водню
             if validated_strings['gas_type'] in ("Гелій", "Водень"):
@@ -1313,7 +1380,8 @@ class BalloonCalculatorGUI:
             )
             settings.save_to_file()
             logging.info("Налаштування збережено через Pydantic Settings")
-            messagebox.showinfo("Успіх", "Налаштування збережено")
+            if not silent:
+                messagebox.showinfo("Успіх", "Налаштування збережено")
         except ImportError:
             # Fallback на старий спосіб
             settings = {
@@ -1338,10 +1406,16 @@ class BalloonCalculatorGUI:
                 'pear_bottom_radius': self.entries.get('pear_bottom_radius').get() if 'pear_bottom_radius' in self.entries else "",
             }
             try:
-                with open('balloon_settings.json', 'w', encoding='utf-8') as f:
+                # Визначаємо шлях для налаштувань (в exe режимі використовуємо папку з exe)
+                if getattr(sys, 'frozen', False):
+                    settings_path = os.path.join(os.path.dirname(sys.executable), 'balloon_settings.json')
+                else:
+                    settings_path = 'balloon_settings.json'
+                with open(settings_path, 'w', encoding='utf-8') as f:
                     json.dump(settings, f, ensure_ascii=False, indent=2)
                 logging.info("Налаштування збережено: %s", settings)
-                messagebox.showinfo("Успіх", "Налаштування збережено")
+                if not silent:
+                    messagebox.showinfo("Успіх", "Налаштування збережено")
             except Exception as e:
                 logging.error("Не вдалося зберегти налаштування: %s", str(e), exc_info=True)
                 messagebox.showerror("Помилка", f"Не вдалося зберегти налаштування: {e}")
@@ -1358,57 +1432,33 @@ class BalloonCalculatorGUI:
             settings = settings_obj.to_dict()
             logging.info("Завантажено налаштування через Pydantic Settings")
                 
-            # Встановлення значень (для обох випадків)
+            # Встановлення значень для комбобоксів
             self.mode_var.set(settings.get('mode', 'payload'))
             self.material_var.set(settings.get('material', 'TPU'))
             self.gas_var.set(settings.get('gas', 'Гелій'))
             if 'shape_type' in settings:
                 self.shape_var.set(settings.get('shape_type'))
             
-            if 'thickness' in settings:
-                self.entries['thickness'].delete(0, tk.END)
-                self.entries['thickness'].insert(0, settings['thickness'])
-                    
-                if 'start_height' in settings:
-                    self.entries['start_height'].delete(0, tk.END)
-                    self.entries['start_height'].insert(0, settings['start_height'])
-                    
-                if 'work_height' in settings:
-                    self.entries['work_height'].delete(0, tk.END)
-                    self.entries['work_height'].insert(0, settings['work_height'])
-                    
-                if 'ground_temp' in settings:
-                    self.entries['ground_temp'].delete(0, tk.END)
-                    self.entries['ground_temp'].insert(0, settings['ground_temp'])
-                    
-                if 'inside_temp' in settings:
-                    self.entries['inside_temp'].delete(0, tk.END)
-                    self.entries['inside_temp'].insert(0, settings['inside_temp'])
-                    
-                if 'payload' in settings:
-                    self.entries['payload'].delete(0, tk.END)
-                    self.entries['payload'].insert(0, settings['payload'])
-                    
-                if 'gas_volume' in settings:
-                    self.entries['gas_volume'].delete(0, tk.END)
-                    self.entries['gas_volume'].insert(0, settings['gas_volume'])
-                    
-                if 'perm_mult' in settings:
-                    self.entries['perm_mult'].set(settings['perm_mult'])
-                
-                if 'extra_mass' in settings and 'extra_mass' in self.entries:
-                    self.entries['extra_mass'].delete(0, tk.END)
-                    self.entries['extra_mass'].insert(0, settings['extra_mass'])
-                
-                if 'seam_factor' in settings and 'seam_factor' in self.entries:
-                    self.entries['seam_factor'].delete(0, tk.END)
-                    self.entries['seam_factor'].insert(0, settings['seam_factor'])
-                
-                # Форма та параметри
-                for key in ['pillow_len','pillow_wid','pear_height','pear_top_radius','pear_bottom_radius','cigar_length','cigar_radius']:
-                    if key in settings and key in self.entries:
-                        self.entries[key].delete(0, tk.END)
-                        self.entries[key].insert(0, settings[key])
+            # Завантаження полів Entry (винесено з-під if thickness)
+            entry_fields = [
+                'thickness', 'start_height', 'work_height', 'ground_temp', 
+                'inside_temp', 'payload', 'gas_volume', 'extra_mass', 'seam_factor'
+            ]
+            for field in entry_fields:
+                if field in settings and field in self.entries:
+                    self.entries[field].delete(0, tk.END)
+                    self.entries[field].insert(0, str(settings[field]))
+            
+            # perm_mult - особливий випадок (Entry, не StringVar)
+            if 'perm_mult' in settings and 'perm_mult' in self.entries:
+                self.entries['perm_mult'].delete(0, tk.END)
+                self.entries['perm_mult'].insert(0, str(settings['perm_mult']))
+            
+            # Форма та параметри
+            for key in ['pillow_len','pillow_wid','pear_height','pear_top_radius','pear_bottom_radius','cigar_length','cigar_radius']:
+                if key in settings and key in self.entries:
+                    self.entries[key].delete(0, tk.END)
+                    self.entries[key].insert(0, str(settings[key]))
                     
         except Exception as e:
             logging.error("Помилка завантаження налаштувань: %s", str(e), exc_info=True)
@@ -1440,6 +1490,15 @@ class BalloonCalculatorGUI:
             self.result_text_widget.delete(1.0, tk.END)
             self.result_text_widget.config(state="disabled")
         
+    def on_close(self):
+        """Обробник закриття вікна - зберігає налаштування"""
+        try:
+            self.save_settings(silent=True)  # Зберігаємо без повідомлення
+        except Exception as e:
+            logging.error("Помилка збереження налаштувань при закритті: %s", str(e), exc_info=True)
+        finally:
+            self.root.destroy()
+    
     def run(self):
         """Запуск додатку"""
         self.root.mainloop()
@@ -1597,16 +1656,21 @@ class BalloonCalculatorGUI:
                     temp_validated, _ = validate_all_inputs(**temp_inputs)
                     
                     # Розраховуємо об'єм з навантаження використовуючи поточний матеріал
-                    temp_result = calculate_balloon_parameters(
+                    temp_result = solve_payload_to_volume(
                         gas_type=temp_inputs['gas_type'],
-                        gas_volume=temp_validated['gas_volume'],
+                        target_payload=temp_validated['gas_volume'],  # gas_volume тут - це payload
                         material=temp_inputs['material'],
                         thickness_um=temp_validated['thickness'],
                         start_height=temp_validated['start_height'],
                         work_height=temp_validated['work_height'],
                         ground_temp=temp_validated['ground_temp'],
                         inside_temp=temp_validated['inside_temp'],
-                        mode='volume'
+                        duration=0,
+                        perm_mult=1.0,
+                        shape_type='sphere',
+                        shape_params={},
+                        extra_mass=0.0,
+                        seam_factor=1.0,
                     )
                     # Отримуємо об'єм газу з результату
                     gas_volume_val = str(temp_result.get('gas_volume', payload_val))
@@ -1740,16 +1804,21 @@ class BalloonCalculatorGUI:
                         'mode': 'volume'
                     }
                     temp_validated, _ = validate_all_inputs(**temp_inputs)
-                    temp_result = calculate_balloon_parameters(
+                    temp_result = solve_payload_to_volume(
                         gas_type=temp_inputs['gas_type'],
-                        gas_volume=temp_validated['gas_volume'],
+                        target_payload=temp_validated['gas_volume'],  # gas_volume тут - це payload
                         material=temp_inputs['material'],
                         thickness_um=temp_validated['thickness'],
                         start_height=temp_validated['start_height'],
                         work_height=temp_validated['work_height'],
                         ground_temp=temp_validated['ground_temp'],
                         inside_temp=temp_validated['inside_temp'],
-                        mode='volume'
+                        duration=0,
+                        perm_mult=1.0,
+                        shape_type='sphere',
+                        shape_params={},
+                        extra_mass=0.0,
+                        seam_factor=1.0,
                     )
                     gas_volume_val = str(temp_result.get('gas_volume', payload_val))
                     logging.info(f"Оптимальна висота: розраховано об'єм {gas_volume_val} м³ з навантаження {payload_val} кг")
@@ -1844,7 +1913,8 @@ class BalloonCalculatorGUI:
             perm_mult_str = self.entries['perm_mult'].get()
             try:
                 perm_mult = float(perm_mult_str)
-            except:
+            except (ValueError, TypeError) as e:
+                logging.debug(f"Не вдалося конвертувати perm_mult '{perm_mult_str}': {e}, використовуємо 1.0")
                 perm_mult = 1.0
             
             flight_time = calculate_max_flight_time(
@@ -2030,7 +2100,30 @@ class BalloonCalculatorGUI:
         self.pattern_segments_var = tk.StringVar(value="12")
         pattern_segments_entry = ttk.Entry(control_frame, textvariable=self.pattern_segments_var, width=10)
         pattern_segments_entry.grid(row=row, column=1, sticky="w", padx=(10, 0))
-        ttk.Label(control_frame, text="(для сфери)", font=("Segoe UI", 8), foreground="#888888").grid(
+        ttk.Label(control_frame, text="(для сфери/груші/сигари)", font=("Segoe UI", 8), foreground="#888888").grid(
+            row=row, column=2, sticky="w", padx=(5, 0)
+        )
+        row += 1
+        
+        # Припуск на шов
+        ttk.Label(control_frame, text="Припуск на шов (мм):").grid(row=row, column=0, sticky="w")
+        self.seam_allowance_entry = ttk.Entry(control_frame, width=10)
+        self.seam_allowance_entry.insert(0, "10")
+        self.seam_allowance_entry.grid(row=row, column=1, sticky="w", padx=(10, 0))
+        
+        # Поля для розкладки тканини
+        row += 1
+        ttk.Label(control_frame, text="Ширина рулону (мм):").grid(row=row, column=0, sticky="w", pady=(10, 5))
+        self.fabric_width_entry = ttk.Entry(control_frame, width=10)
+        self.fabric_width_entry.insert(0, "1500")
+        self.fabric_width_entry.grid(row=row, column=1, sticky="w", padx=(10, 0))
+        
+        row += 1
+        ttk.Label(control_frame, text="Зазор між деталями (мм):").grid(row=row, column=0, sticky="w", pady=(5, 5))
+        self.min_gap_entry = ttk.Entry(control_frame, width=10)
+        self.min_gap_entry.insert(0, "10")
+        self.min_gap_entry.grid(row=row, column=1, sticky="w", padx=(10, 0))
+        ttk.Label(control_frame, text="(типово 5-20 мм)", font=("Segoe UI", 8), foreground="#888888").grid(
             row=row, column=2, sticky="w", padx=(5, 0)
         )
         row += 1
@@ -2150,7 +2243,8 @@ class BalloonCalculatorGUI:
                         from balloon.shapes import sphere_radius_from_volume
                         radius = sphere_radius_from_volume(gas_volume)
                         shape_params = {'radius': radius}
-                    except:
+                    except (ValueError, TypeError, AttributeError) as e:
+                        logging.warning(f"Не вдалося визначити радіус сфери: {e}")
                         messagebox.showerror("Помилка", "Не вдалося визначити радіус сфери. Спочатку виконайте розрахунок.")
                         return
             
@@ -2163,7 +2257,8 @@ class BalloonCalculatorGUI:
                             'pillow_len': float(self.entries.get('pillow_len', ttk.Entry()).get() or "3.0"),
                             'pillow_wid': float(self.entries.get('pillow_wid', ttk.Entry()).get() or "2.0")
                         }
-                    except:
+                    except (ValueError, TypeError, AttributeError) as e:
+                        logging.warning(f"Не вдалося отримати параметри подушки: {e}")
                         messagebox.showerror("Помилка", "Введіть параметри подушки або виконайте розрахунок.")
                         return
             
@@ -2177,7 +2272,8 @@ class BalloonCalculatorGUI:
                             'pear_top_radius': float(self.entries.get('pear_top_radius', ttk.Entry()).get() or "1.2"),
                             'pear_bottom_radius': float(self.entries.get('pear_bottom_radius', ttk.Entry()).get() or "0.6")
                         }
-                    except:
+                    except (ValueError, TypeError, AttributeError) as e:
+                        logging.warning(f"Не вдалося отримати параметри груші: {e}")
                         messagebox.showerror("Помилка", "Введіть параметри груші або виконайте розрахунок.")
                         return
             
@@ -2190,7 +2286,8 @@ class BalloonCalculatorGUI:
                             'cigar_length': float(self.entries.get('cigar_length', ttk.Entry()).get() or "5.0"),
                             'cigar_radius': float(self.entries.get('cigar_radius', ttk.Entry()).get() or "1.0")
                         }
-                    except:
+                    except (ValueError, TypeError, AttributeError) as e:
+                        logging.warning(f"Не вдалося отримати параметри сигари: {e}")
                         messagebox.showerror("Помилка", "Введіть параметри сигари або виконайте розрахунок.")
                         return
             
@@ -2201,11 +2298,28 @@ class BalloonCalculatorGUI:
                     num_segments = 4
                 if num_segments > 32:
                     num_segments = 32
-            except:
+            except (ValueError, TypeError) as e:
+                logging.debug(f"Не вдалося отримати кількість сегментів: {e}, використовуємо 12")
                 num_segments = 12
             
             # Генеруємо патерн
-            pattern = generate_pattern_from_shape(shape_code, shape_params, num_segments)
+            # Отримуємо припуск на шов (за замовчуванням 10 мм)
+            seam_allowance_mm = 10.0
+            if hasattr(self, 'seam_allowance_entry') and self.seam_allowance_entry:
+                try:
+                    seam_allowance_mm = float(self.seam_allowance_entry.get() or "10")
+                except (ValueError, AttributeError):
+                    seam_allowance_mm = 10.0
+            
+            # Для sphere/pear/cigar використовуємо profile_based (узгоджено з 3D та розрахунками)
+            # Для pillow - окремий метод (подушка не поверхня обертання, тому не має профілю)
+            if shape_code in ['sphere', 'pear', 'cigar']:
+                pattern = generate_pattern_from_shape_profile(
+                    shape_code, shape_params, num_segments, seam_allowance_mm
+                )
+            else:
+                # Pillow - окремий метод, оскільки не є поверхнею обертання
+                pattern = generate_pattern_from_shape(shape_code, shape_params, num_segments, seam_allowance_mm)
             self.current_pattern = pattern
             
             # Візуалізуємо
@@ -2223,7 +2337,7 @@ class BalloonCalculatorGUI:
             messagebox.showerror("Помилка", f"Не вдалося згенерувати викрійку: {e}")
     
     def visualize_pattern(self, pattern):
-        """Візуалізує патерн на canvas"""
+        """Візуалізує патерн на canvas з покращеною візуалізацією"""
         self.pattern_canvas.delete("all")
         
         canvas_width = self.pattern_canvas.winfo_width()
@@ -2244,17 +2358,73 @@ class BalloonCalculatorGUI:
         elif pattern_type == 'cigar_gore':
             self._draw_cigar_pattern(pattern, canvas_width, canvas_height)
     
+    def _draw_grid_and_labels(self, width, height, pattern):
+        """Малює координатну сітку та мітки для розкрою з покращеною візуалізацією"""
+        # Легка сітка на фоні
+        grid_spacing = 50  # пікселів
+        grid_color = "#333333"
+        
+        # Вертикальні лінії
+        for x in range(0, width, grid_spacing):
+            self.pattern_canvas.create_line(x, 0, x, height, fill=grid_color, width=1)
+        
+        # Горизонтальні лінії
+        for y in range(0, height, grid_spacing):
+            self.pattern_canvas.create_line(0, y, width, y, fill=grid_color, width=1)
+        
+        # Центральні лінії (товстіші)
+        center_x = width / 2
+        center_y = height / 2
+        self.pattern_canvas.create_line(center_x, 0, center_x, height, fill="#444444", width=1, dash=(2, 2))
+        self.pattern_canvas.create_line(0, center_y, width, center_y, fill="#444444", width=1, dash=(2, 2))
+        
+        # Мітки на осях (якщо є інформація про масштаб)
+        max_width = pattern.get('max_width', 0)
+        meridian_length = pattern.get('meridian_length', 0)
+        
+        if max_width > 0:
+            # Мітки по X (ширина)
+            scale = (width * 0.75) / (2 * max_width) if max_width > 0 else 1
+            for i in range(5):
+                x_mark = center_x + (max_width * i / 4) * scale
+                self.pattern_canvas.create_line(x_mark, center_y - 5, x_mark, center_y + 5, fill="#666666", width=1)
+                if i > 0:
+                    self.pattern_canvas.create_text(x_mark, center_y + 15, text=f"{max_width * i / 4:.2f}м", 
+                                                   fill="#888888", font=("Arial", 7))
+        
+        if meridian_length > 0:
+            # Мітки по Y (довжина)
+            scale = (height * 0.75) / meridian_length if meridian_length > 0 else 1
+            for i in range(5):
+                y_mark = center_y - (meridian_length * i / 4) * scale
+                self.pattern_canvas.create_line(center_x - 5, y_mark, center_x + 5, y_mark, fill="#666666", width=1)
+                if i > 0:
+                    self.pattern_canvas.create_text(center_x - 15, y_mark, text=f"{meridian_length * i / 4:.2f}м", 
+                                                   fill="#888888", font=("Arial", 7), anchor="e")
+        
+        # Додаємо інформацію про метод припуску на шов
+        seam_method = pattern.get('seam_allowance_method', 'simple')
+        if seam_method == 'shapely_normal_offset':
+            self.pattern_canvas.create_text(
+                width - 10, height - 10,
+                text="Припуск: нормальний offset",
+                fill="#66d17c", font=("Arial", 8), anchor="se"
+            )
+    
     def _draw_sphere_gore(self, pattern, width, height):
-        """Малює гобеновий сегмент для сфери"""
+        """Малює гобеновий сегмент для сфери з покращеною візуалізацією"""
         points = pattern.get('points', [])
         if not points:
             return
         
+        # Додаємо координатну сітку та розміри
+        self._draw_grid_and_labels(width, height, pattern)
+        
         max_y = max(abs(y) for x, y in points)
         max_x = max(abs(x) for x, y in points)
         
-        scale_x = (width * 0.8) / (2 * max_x) if max_x > 0 else 1
-        scale_y = (height * 0.8) / (2 * max_y) if max_y > 0 else 1
+        scale_x = (width * 0.75) / (2 * max_x) if max_x > 0 else 1
+        scale_y = (height * 0.75) / (2 * max_y) if max_y > 0 else 1
         scale = min(scale_x, scale_y)
         
         center_x = width / 2
@@ -2266,18 +2436,21 @@ class BalloonCalculatorGUI:
             py = center_y - y * scale
             path.append((px, py))
         
+        # Малюємо контур з покращеними стилями
         for i in range(len(path) - 1):
             x1, y1 = path[i]
             x2, y2 = path[i + 1]
-            self.pattern_canvas.create_line(x1, y1, x2, y2, fill="#4a90e2", width=2)
+            # Основна лінія контуру (товстіша, більш яскрава)
+            self.pattern_canvas.create_line(x1, y1, x2, y2, fill="#4a90e2", width=3, capstyle="round", joinstyle="round")
         
+        # Дзеркальна половина
         for i in range(len(path) - 1):
             x1, y1 = path[i]
             x2, y2 = path[i + 1]
             self.pattern_canvas.create_line(
                 center_x - (x1 - center_x), y1,
                 center_x - (x2 - center_x), y2,
-                fill="#4a90e2", width=2
+                fill="#4a90e2", width=3, capstyle="round", joinstyle="round"
             )
         
         if path:
@@ -2291,7 +2464,8 @@ class BalloonCalculatorGUI:
         # Додаємо розміри та анотації
         radius = pattern.get('radius', 0)
         max_width = pattern.get('max_width', 0)
-        total_height = pattern.get('total_height', 0)
+        # Використовуємо meridian_length (довжина по меридіану)
+        meridian_length = pattern.get('meridian_length', 0)
         
         self.pattern_canvas.create_text(
             center_x, 20, text=f"Сегмент (1 з {pattern.get('num_gores', 12)})",
@@ -2313,18 +2487,42 @@ class BalloonCalculatorGUI:
                 fill="#66d17c", font=("Arial", 8)
             )
         
-        if total_height > 0:
-            # Висота
+        # Використовуємо meridian_length для відображення
+        meridian_length = pattern.get('meridian_length', 0)
+        if meridian_length > 0:
+            # Довжина по меридіану
             self.pattern_canvas.create_line(
-                center_x + max_x * scale + 10, center_y - total_height * scale / 2,
-                center_x + max_x * scale + 10, center_y + total_height * scale / 2,
+                center_x + max_x * scale + 10, center_y - meridian_length * scale / 2,
+                center_x + max_x * scale + 10, center_y + meridian_length * scale / 2,
                 fill="#66d17c", width=1, dash=(3, 3)
             )
             self.pattern_canvas.create_text(
                 center_x + max_x * scale + 15, center_y,
-                text=f"Висота: {total_height:.2f} м",
+                text=f"Довжина (по шву): {meridian_length:.2f} м",
                 fill="#66d17c", font=("Arial", 8), anchor="w"
             )
+        
+        # Додаємо notches (мітки суміщення) на візуалізацію
+        notches = pattern.get('notches', [])
+        if notches and len(points) > 0:
+            for notch_y in notches:
+                # Знаходимо найближчу точку по Y
+                closest_idx = min(range(len(points)), key=lambda i: abs(points[i][1] - notch_y))
+                if 0 <= closest_idx < len(points):
+                    x, y = points[closest_idx]
+                    px = center_x + x * scale
+                    py = center_y - y * scale
+                    # Малюємо мітку: коротка лінія перпендикулярна до контуру
+                    notch_length = 5  # 5 пікселів
+                    self.pattern_canvas.create_line(
+                        px, py, px + notch_length, py,
+                        fill="#ff6b6b", width=2
+                    )
+                    self.pattern_canvas.create_line(
+                        center_x - (px - center_x), py,
+                        center_x - (px - center_x) - notch_length, py,
+                        fill="#ff6b6b", width=2
+                    )
         
         if radius > 0:
             self.pattern_canvas.create_text(
@@ -2433,23 +2631,34 @@ class BalloonCalculatorGUI:
         if not points:
             return
         
+        # Для груші y - це меридіанна довжина (може бути більше геометричної висоти)
+        # x - це півширина сегмента
+        min_y = min(y for x, y in points) if points else 0
         max_y = max(y for x, y in points) if points else 1
-        max_x = max(x for x, y in points) if points else 1
+        max_x = max(abs(x) for x, y in points) if points else 1
         
-        scale_x = (width * 0.8) / (2 * max_x) if max_x > 0 else 1
-        scale_y = (height * 0.8) / max_y if max_y > 0 else 1
+        # Масштабування з урахуванням відступів
+        y_range = max_y - min_y if max_y > min_y else max_y
+        scale_x = (width * 0.75) / (2 * max_x) if max_x > 0 else 1
+        scale_y = (height * 0.75) / y_range if y_range > 0 else 1
         scale = min(scale_x, scale_y)
         
         center_x = width / 2
-        center_y = height / 2
+        # Центруємо по Y: нижня точка має бути знизу з відступом
+        padding_top = height * 0.1
+        padding_bottom = height * 0.1
+        available_height = height - padding_top - padding_bottom
+        center_y = padding_bottom + available_height / 2
         
         # Малюємо сегмент
         coords = []
         for x, y in points:
-            # Для груші y йде від низу (0) до верху (height)
-            # Перетворюємо координати
+            # Y починається з 0 (низ) і йде до max_y (верх)
+            # Перетворюємо: нижня точка (y=0) -> знизу, верхня (y=max_y) -> зверху
             screen_x = center_x + x * scale
-            screen_y = center_y + (y - max_y / 2) * scale  # Y від низу до верху
+            # Інвертуємо Y: y=0 -> знизу, y=max_y -> зверху
+            normalized_y = (y - min_y) / y_range if y_range > 0 else 0
+            screen_y = padding_bottom + available_height * (1 - normalized_y)
             coords.append((screen_x, screen_y))
         
         # Малюємо ліву половину сегмента
@@ -2483,6 +2692,39 @@ class BalloonCalculatorGUI:
             text=f"Висота: {pear_height:.2f} м\nВерхній радіус: {top_radius:.2f} м\nНижній радіус: {bottom_radius:.2f} м",
             fill="#cccccc", font=("Arial", 9), justify="center"
         )
+        
+        # Додаємо центральну лінію
+        if coords:
+            first_y = coords[0][1]
+            last_y = coords[-1][1]
+            self.pattern_canvas.create_line(
+                center_x, first_y, center_x, last_y,
+                fill="#ffffff", width=1, dash=(5, 5)
+            )
+        
+        # Додаємо notches (мітки суміщення)
+        notches = pattern.get('notches', [])
+        if notches and len(points) > 0:
+            for notch_y in notches:
+                # Знаходимо найближчу точку по Y
+                closest_idx = min(range(len(points)), key=lambda i: abs(points[i][1] - notch_y))
+                if 0 <= closest_idx < len(points):
+                    x, y = points[closest_idx]
+                    screen_x = center_x + x * scale
+                    # Використовуємо ту саму логіку перетворення координат
+                    normalized_y = (y - min_y) / y_range if y_range > 0 else 0
+                    screen_y = padding_bottom + available_height * (1 - normalized_y)
+                    # Малюємо мітку: коротка лінія перпендикулярна до контуру
+                    notch_length = 5  # 5 пікселів
+                    self.pattern_canvas.create_line(
+                        screen_x, screen_y, screen_x + notch_length, screen_y,
+                        fill="#ff6b6b", width=2
+                    )
+                    self.pattern_canvas.create_line(
+                        center_x - (screen_x - center_x), screen_y,
+                        center_x - (screen_x - center_x) - notch_length, screen_y,
+                        fill="#ff6b6b", width=2
+                    )
     
     def _draw_cigar_pattern(self, pattern, width, height):
         """Малює гобеновий сегмент для сигари"""
@@ -2534,10 +2776,32 @@ class BalloonCalculatorGUI:
             fill="#ffffff", font=("Arial", 12, "bold")
         )
         self.pattern_canvas.create_text(
-            center_x, height - 40, 
+            center_x, height - 40,
             text=f"Довжина: {cigar_length:.2f} м\nРадіус: {radius:.2f} м",
             fill="#cccccc", font=("Arial", 9), justify="center"
         )
+        
+        # Додаємо notches (мітки суміщення)
+        notches = pattern.get('notches', [])
+        if notches and len(points) > 0:
+            for notch_y in notches:
+                # Знаходимо найближчу точку по Y
+                closest_idx = min(range(len(points)), key=lambda i: abs(points[i][1] - notch_y))
+                if 0 <= closest_idx < len(points):
+                    x, y = points[closest_idx]
+                    screen_x = center_x + x * scale
+                    screen_y = center_y + (y - max_y / 2) * scale
+                    # Малюємо мітку: коротка лінія перпендикулярна до контуру
+                    notch_length = 5  # 5 пікселів
+                    self.pattern_canvas.create_line(
+                        screen_x, screen_y, screen_x + notch_length, screen_y,
+                        fill="#ff6b6b", width=2
+                    )
+                    self.pattern_canvas.create_line(
+                        center_x - (screen_x - center_x), screen_y,
+                        center_x - (screen_x - center_x) - notch_length, screen_y,
+                        fill="#ff6b6b", width=2
+                    )
     
     def show_pattern_info(self, pattern):
         """Показує інформацію про патерн"""
@@ -2558,7 +2822,11 @@ class BalloonCalculatorGUI:
             info.append(f"Кількість сегментів: {pattern.get('num_gores', 12)}")
             info.append(f"Радіус сфери: {pattern.get('radius', 0):.2f} м")
             info.append(f"Максимальна ширина сегмента: {pattern.get('max_width', 0):.2f} м")
-            info.append(f"Висота сегмента: {pattern.get('total_height', 0):.2f} м")
+            meridian_length = pattern.get('meridian_length', 0)
+            axis_height = pattern.get('axis_height')
+            info.append(f"Довжина по меридіану (по шву): {meridian_length:.2f} м")
+            if axis_height:
+                info.append(f"Геометрична висота: {axis_height:.2f} м")
             info.append(f"Площа одного сегмента: {pattern.get('gore_area', 0):.2f} м²")
             info.append(f"Загальна площа: {pattern.get('total_area', 0):.2f} м²")
         
@@ -2587,13 +2855,67 @@ class BalloonCalculatorGUI:
             info.append(f"Верхній радіус: {pattern.get('top_radius', 0):.2f} м")
             info.append(f"Нижній радіус: {pattern.get('bottom_radius', 0):.2f} м")
             info.append(f"Максимальна ширина сегмента: {pattern.get('max_width', 0):.2f} м")
-            info.append(f"Висота сегмента: {pattern.get('total_height', 0):.2f} м")
+            meridian_length = pattern.get('meridian_length', 0)
+            axis_height = pattern.get('axis_height')
+            info.append(f"Довжина по меридіану (по шву): {meridian_length:.2f} м")
+            if axis_height:
+                info.append(f"Геометрична висота: {axis_height:.2f} м")
             info.append(f"Площа одного сегмента: {pattern.get('gore_area', 0):.2f} м²")
             info.append(f"Загальна площа: {pattern.get('total_area', 0):.2f} м²")
         
         seam_length = calculate_seam_length(pattern)
         info.append("")
         info.append(f"Загальна довжина швів: {seam_length:.2f} м")
+        
+        # Інформація про припуск на шов
+        if 'seam_allowance_m' in pattern:
+            info.append(f"Припуск на шов: {pattern['seam_allowance_m'] * 1000:.1f} мм")
+        
+        # Оцінка тканини
+        try:
+            from balloon.export.nesting import estimate_fabric_requirements
+            # Отримуємо параметри з GUI
+            fabric_width_mm = 1500.0
+            min_gap_mm = 10.0
+            if hasattr(self, 'fabric_width_entry') and self.fabric_width_entry:
+                try:
+                    fabric_width_mm = float(self.fabric_width_entry.get() or "1500")
+                except (ValueError, AttributeError):
+                    fabric_width_mm = 1500.0
+            if hasattr(self, 'min_gap_entry') and self.min_gap_entry:
+                try:
+                    min_gap_mm = float(self.min_gap_entry.get() or "10")
+                except (ValueError, AttributeError):
+                    min_gap_mm = 10.0
+            fabric_info = estimate_fabric_requirements(pattern, fabric_width_mm=fabric_width_mm, min_gap_mm=min_gap_mm)
+            info.append("")
+            info.append("=" * 50)
+            info.append("ОЦІНКА ТКАНИНИ")
+            info.append("=" * 50)
+            info.append(f"Ширина рулону: {fabric_info['fabric_width_mm']:.0f} мм")
+            info.append(f"Необхідна довжина: {fabric_info['fabric_length_m']:.2f} м")
+            info.append(f"Площа тканини: {fabric_info['fabric_area_m2']:.2f} м²")
+            info.append(f"Площа панелей: {fabric_info['panels_area_m2']:.2f} м²")
+            info.append(f"Відходи: {fabric_info['waste_m2']:.2f} м² ({fabric_info['waste_percent']:.1f}%)")
+            if 'gores_per_row' in fabric_info:
+                info.append(f"Розкладка: {fabric_info['gores_per_row']} сегментів в ряд, {fabric_info['num_rows']} рядів")
+        except Exception as e:
+            logging.warning(f"Не вдалося оцінити тканину: {e}")
+        
+        # UX підказки
+        info.append("")
+        info.append("=" * 50)
+        info.append("ВАЖЛИВО")
+        info.append("=" * 50)
+        info.append("• Викрійка для нерозтяжної тканини")
+        info.append("• Враховуйте розтяжність матеріалу при розкрої")
+        info.append("• Припуск на шов додано по нормалі до контуру")
+        info.append("• Мітки суміщення та осьова лінія додані в SVG")
+        if 'points' in pattern:
+            num_points = len(pattern['points'])
+            info.append(f"• Точність апроксимації: {num_points} точок")
+            if num_points < 50:
+                info.append("  ⚠️ Для складних форм рекомендується ≥100 точок")
         
         self.pattern_info_text.insert(1.0, "\n".join(info))
         self.pattern_info_text.config(state="disabled")
@@ -2663,7 +2985,7 @@ class BalloonCalculatorGUI:
         except Exception:
             pass  # Якщо щось пішло не так, продовжуємо зі старим експортом
         
-        # Старий код експорту SVG/PNG
+        # Експорт SVG/PNG
         if not hasattr(self, 'current_pattern'):
             messagebox.showwarning("Попередження", "Спочатку згенеруйте викрійку")
             return
@@ -2671,33 +2993,103 @@ class BalloonCalculatorGUI:
         try:
             from tkinter import filedialog
             filename = filedialog.asksaveasfilename(
-                defaultextension=".png",
-                filetypes=[("PNG files", "*.png"), ("All files", "*.*")]
+                defaultextension=".svg",
+                filetypes=[
+                    ("SVG files", "*.svg"),
+                    ("PNG files", "*.png"),
+                    ("PDF files", "*.pdf"),
+                    ("DXF files", "*.dxf"),
+                    ("All files", "*.*")
+                ]
             )
             if filename:
-                plt = get_plt()
-                fig, ax = plt.subplots(figsize=(10, 12))
-                ax.set_aspect('equal')
-                ax.axis('off')
-                ax.set_facecolor('#1e1e1e')
-                fig.patch.set_facecolor('#1e1e1e')
-                
                 pattern = self.current_pattern
-                pattern_type = pattern.get('pattern_type')
                 
-                if pattern_type == 'sphere_gore':
-                    points = pattern.get('points', [])
-                    if points:
-                        xs = [x for x, y in points]
-                        ys = [y for x, y in points]
-                        ax.plot(xs, ys, 'b-', linewidth=2)
-                        ax.plot([-x for x in xs], ys, 'b-', linewidth=2)
-                        ax.axvline(0, color='white', linestyle='--', alpha=0.5)
-                
-                plt.savefig(filename, dpi=150, bbox_inches='tight', facecolor='#1e1e1e')
-                plt.close()
-                messagebox.showinfo("Успіх", f"Викрійку збережено: {filename}")
+                # Визначаємо формат з розширення
+                if filename.lower().endswith('.svg'):
+                    # SVG експорт
+                    try:
+                        from balloon.export import export_pattern_to_svg
+                        filepath = export_pattern_to_svg(pattern, filename, add_notches=True, add_centerline=True)
+                        messagebox.showinfo("Успіх", f"Викрійку збережено в SVG:\n{filepath}\n\nДодано: мітки суміщення, осьова лінія")
+                    except Exception as e:
+                        logging.error(f"Помилка експорту SVG: {e}", exc_info=True)
+                        messagebox.showerror("Помилка", f"Не вдалося експортувати SVG: {e}")
+                elif filename.lower().endswith('.pdf'):
+                    # PDF експорт
+                    try:
+                        from balloon.export import export_pattern_to_pdf
+                        filepath = export_pattern_to_pdf(
+                            pattern, filename,
+                            scale_mm_per_m=1000.0,
+                            page_size='A4',
+                            add_notches=True,
+                            add_centerline=True
+                        )
+                        messagebox.showinfo("Успіх", f"Викрійку збережено в PDF:\n{filepath}\n\nРозбито на сторінки A4 з мітками для склейки")
+                    except ImportError as e:
+                        messagebox.showerror(
+                            "Бібліотека не встановлена",
+                            f"Для експорту в PDF потрібна бібліотека reportlab.\n\n"
+                            f"Встановіть: python -m pip install reportlab"
+                        )
+                    except Exception as e:
+                        logging.error(f"Помилка експорту PDF: {e}", exc_info=True)
+                        messagebox.showerror("Помилка", f"Не вдалося експортувати PDF: {e}")
+                elif filename.lower().endswith('.dxf'):
+                    # DXF експорт
+                    try:
+                        from balloon.export import export_pattern_to_dxf
+                        filepath = export_pattern_to_dxf(
+                            pattern, filename,
+                            scale_mm_per_m=1000.0,
+                            add_notches=True,
+                            add_centerline=True
+                        )
+                        messagebox.showinfo("Успіх", f"Викрійку збережено в DXF:\n{filepath}\n\nГотово для імпорту в CAD системи")
+                    except ImportError as e:
+                        messagebox.showerror(
+                            "Бібліотека не встановлена",
+                            f"Для експорту в DXF потрібна бібліотека ezdxf.\n\n"
+                            f"Встановіть: python -m pip install ezdxf"
+                        )
+                    except Exception as e:
+                        logging.error(f"Помилка експорту DXF: {e}", exc_info=True)
+                        messagebox.showerror("Помилка", f"Не вдалося експортувати DXF: {e}")
+                else:
+                    # PNG експорт (через matplotlib)
+                    plt = get_plt()
+                    fig, ax = plt.subplots(figsize=(10, 12))
+                    ax.set_aspect('equal')
+                    ax.axis('off')
+                    ax.set_facecolor('#1e1e1e')
+                    fig.patch.set_facecolor('#1e1e1e')
+                    
+                    pattern_type = pattern.get('pattern_type')
+                    
+                    if pattern_type in ['sphere_gore', 'pear_gore', 'cigar_gore']:
+                        points = pattern.get('points', [])
+                        if points:
+                            xs = [x for x, y in points]
+                            ys = [y for x, y in points]
+                            # Малюємо лінію викрійки (з припуском)
+                            ax.plot(xs, ys, 'b-', linewidth=2, label='Лінія розкрою')
+                            ax.plot([-x for x in xs], ys, 'b-', linewidth=2)
+                            # Малюємо лінію шва (без припуску), якщо є
+                            if 'seam_allowance_m' in pattern and pattern['seam_allowance_m'] > 0:
+                                allowance = pattern['seam_allowance_m']
+                                seam_xs = [x - allowance for x in xs]
+                                seam_ys = ys
+                                ax.plot(seam_xs, seam_ys, 'r--', linewidth=1, alpha=0.7, label='Лінія шва')
+                                ax.plot([-x for x in seam_xs], seam_ys, 'r--', linewidth=1, alpha=0.7)
+                            ax.axvline(0, color='white', linestyle='--', alpha=0.5)
+                            ax.legend(loc='upper right')
+                    
+                    plt.savefig(filename, dpi=150, bbox_inches='tight', facecolor='#1e1e1e')
+                    plt.close()
+                    messagebox.showinfo("Успіх", f"Викрійку збережено: {filename}")
         except Exception as e:
+            logging.error(f"Помилка експорту: {e}", exc_info=True)
             messagebox.showerror("Помилка", f"Не вдалося експортувати: {e}")
     
     def export_pattern_data(self):
@@ -2735,205 +3127,36 @@ class BalloonCalculatorGUI:
     def show_3d_model(self):
         """Показує 3D модель кулі"""
         try:
-            # Отримуємо параметри з останнього розрахунку або з поточного патерну
-            shape_code = None
-            shape_params = {}
+            # Отримуємо shape_code та shape_params через допоміжну функцію
+            current_pattern = getattr(self, 'current_pattern', None)
+            last_results = getattr(self, 'last_calculation_results', None)
             
-            if hasattr(self, 'current_pattern'):
-                pattern = self.current_pattern
-                pattern_type = pattern.get('pattern_type')
-                
-                if pattern_type == 'sphere_gore':
-                    shape_code = 'sphere'
-                    radius = pattern.get('radius', 1.0)
-                    shape_params = {'radius': radius}
-                elif pattern_type == 'pillow':
-                    shape_code = 'pillow'
-                    shape_params = {
-                        'pillow_len': pattern.get('length', 3.0),
-                        'pillow_wid': pattern.get('width', 2.0)
-                    }
-                elif pattern_type == 'pear_gore':
-                    shape_code = 'pear'
-                    shape_params = {
-                        'pear_height': pattern.get('height', 3.0),
-                        'pear_top_radius': pattern.get('top_radius', 1.2),
-                        'pear_bottom_radius': pattern.get('bottom_radius', 0.6)
-                    }
-                elif pattern_type == 'cigar_gore':
-                    shape_code = 'cigar'
-                    shape_params = {
-                        'cigar_length': pattern.get('length', 5.0),
-                        'cigar_radius': pattern.get('radius', 1.0)
-                    }
-            
-            # Якщо немає патерну, спробуємо отримати з останнього розрахунку
-            if not shape_code and hasattr(self, 'last_calculation_results'):
-                results = self.last_calculation_results
-                shape_code = results.get('shape_type', 'sphere')
-                # Отримуємо shape_params з results
-                shape_params = results.get('shape_params', {}) or {}
-                
-                # Якщо shape_params порожній, спробуємо отримати з results напряму
-                if not shape_params:
-                    if shape_code == 'sphere' and 'radius' in results:
-                        shape_params = {'radius': results['radius']}
-                    elif shape_code == 'pear':
-                        shape_params = {
-                            'pear_height': results.get('pear_height', 3.0),
-                            'pear_top_radius': results.get('pear_top_radius', 1.2),
-                            'pear_bottom_radius': results.get('pear_bottom_radius', 0.6)
-                        }
-                    elif shape_code == 'cigar':
-                        shape_params = {
-                            'cigar_length': results.get('cigar_length', 5.0),
-                            'cigar_radius': results.get('cigar_radius', 1.0)
-                        }
-                    elif shape_code == 'pillow':
-                        shape_params = {
-                            'pillow_len': results.get('pillow_len', 3.0),
-                            'pillow_wid': results.get('pillow_wid', 2.0)
-                        }
-                
-                # Якщо все ще немає параметрів, спробуємо з полів
-                if shape_code == 'pear' and not shape_params:
-                    # Якщо немає параметрів, спробуємо з полів
-                    try:
-                        shape_params = {
-                            'pear_height': float(self.entries.get('pear_height', ttk.Entry()).get() or "3.0"),
-                            'pear_top_radius': float(self.entries.get('pear_top_radius', ttk.Entry()).get() or "1.2"),
-                            'pear_bottom_radius': float(self.entries.get('pear_bottom_radius', ttk.Entry()).get() or "0.6")
-                        }
-                    except:
-                        shape_params = {'pear_height': 3.0, 'pear_top_radius': 1.2, 'pear_bottom_radius': 0.6}
-                elif shape_code == 'cigar' and not shape_params:
-                    # Якщо немає параметрів, спробуємо з полів
-                    try:
-                        shape_params = {
-                            'cigar_length': float(self.entries.get('cigar_length', ttk.Entry()).get() or "5.0"),
-                            'cigar_radius': float(self.entries.get('cigar_radius', ttk.Entry()).get() or "1.0")
-                        }
-                    except:
-                        shape_params = {'cigar_length': 5.0, 'cigar_radius': 1.0}
-                elif shape_code == 'pillow' and not shape_params:
-                    # Якщо немає параметрів, спробуємо з полів
-                    try:
-                        shape_params = {
-                            'pillow_len': float(self.entries.get('pillow_len', ttk.Entry()).get() or "3.0"),
-                            'pillow_wid': float(self.entries.get('pillow_wid', ttk.Entry()).get() or "2.0")
-                        }
-                    except:
-                        shape_params = {'pillow_len': 3.0, 'pillow_wid': 2.0}
-            
-            # Якщо все ще немає, спробуємо з полів
-            if not shape_code:
-                shape_display = self.pattern_shape_var.get()
-                shape_code = self.shape_display_to_code.get(shape_display, 'sphere')
-                if shape_code == 'sphere':
-                    try:
-                        if hasattr(self, 'last_calculation_results') and 'radius' in self.last_calculation_results:
-                            radius = self.last_calculation_results['radius']
-                        else:
-                            gas_volume = float(self.entries['gas_volume'].get() or "1.0")
-                            from balloon.shapes import sphere_radius_from_volume
-                            radius = sphere_radius_from_volume(gas_volume)
-                        shape_params = {'radius': radius}
-                    except:
-                        shape_params = {'radius': 1.0}
-                elif shape_code == 'pillow':
-                    try:
-                        shape_params = {
-                            'pillow_len': float(self.entries.get('pillow_len', ttk.Entry()).get() or "3.0"),
-                            'pillow_wid': float(self.entries.get('pillow_wid', ttk.Entry()).get() or "2.0")
-                        }
-                    except:
-                        shape_params = {'pillow_len': 3.0, 'pillow_wid': 2.0}
-                elif shape_code == 'pear':
-                    try:
-                        shape_params = {
-                            'pear_height': float(self.entries.get('pear_height', ttk.Entry()).get() or "3.0"),
-                            'pear_top_radius': float(self.entries.get('pear_top_radius', ttk.Entry()).get() or "1.2"),
-                            'pear_bottom_radius': float(self.entries.get('pear_bottom_radius', ttk.Entry()).get() or "0.6")
-                        }
-                    except:
-                        shape_params = {'pear_height': 3.0, 'pear_top_radius': 1.2, 'pear_bottom_radius': 0.6}
-                elif shape_code == 'cigar':
-                    try:
-                        shape_params = {
-                            'cigar_length': float(self.entries.get('cigar_length', ttk.Entry()).get() or "5.0"),
-                            'cigar_radius': float(self.entries.get('cigar_radius', ttk.Entry()).get() or "1.0")
-                        }
-                    except:
-                        shape_params = {'cigar_length': 5.0, 'cigar_radius': 1.0}
-            
-            # Якщо все ще немає shape_code, спробуємо з поточного вибору форми
-            if not shape_code:
-                try:
-                    shape_display = self.entries['shape_type'].get()
-                    shape_code = self.shape_display_to_code.get(shape_display, 'sphere')
-                except:
-                    shape_code = 'sphere'
+            shape_code = get_shape_code_from_sources(
+                entries=self.entries,
+                pattern_shape_var=getattr(self, 'pattern_shape_var', None),
+                last_calculation_results=last_results,
+                current_pattern=current_pattern,
+                shape_display_to_code=self.shape_display_to_code
+            )
             
             if not shape_code:
                 messagebox.showwarning("Попередження", "Спочатку згенеруйте викрійку або виконайте розрахунок")
                 return
             
-            # Перевіряємо, чи є параметри для форми
-            if not shape_params or len(shape_params) == 0:
-                # Якщо немає параметрів, спробуємо отримати з полів
-                if shape_code == 'pear':
-                    try:
-                        shape_params = {
-                            'pear_height': float(self.entries.get('pear_height', ttk.Entry()).get() or "3.0"),
-                            'pear_top_radius': float(self.entries.get('pear_top_radius', ttk.Entry()).get() or "1.2"),
-                            'pear_bottom_radius': float(self.entries.get('pear_bottom_radius', ttk.Entry()).get() or "0.6")
-                        }
-                    except:
-                        shape_params = {'pear_height': 3.0, 'pear_top_radius': 1.2, 'pear_bottom_radius': 0.6}
-                elif shape_code == 'cigar':
-                    try:
-                        shape_params = {
-                            'cigar_length': float(self.entries.get('cigar_length', ttk.Entry()).get() or "5.0"),
-                            'cigar_radius': float(self.entries.get('cigar_radius', ttk.Entry()).get() or "1.0")
-                        }
-                    except:
-                        shape_params = {'cigar_length': 5.0, 'cigar_radius': 1.0}
-                elif shape_code == 'pillow':
-                    try:
-                        shape_params = {
-                            'pillow_len': float(self.entries.get('pillow_len', ttk.Entry()).get() or "3.0"),
-                            'pillow_wid': float(self.entries.get('pillow_wid', ttk.Entry()).get() or "2.0")
-                        }
-                    except:
-                        shape_params = {'pillow_len': 3.0, 'pillow_wid': 2.0}
-                elif shape_code == 'sphere':
-                    try:
-                        if hasattr(self, 'last_calculation_results') and 'radius' in self.last_calculation_results:
-                            radius = self.last_calculation_results['radius']
-                        else:
-                            gas_volume = float(self.entries['gas_volume'].get() or "1.0")
-                            from balloon.shapes import sphere_radius_from_volume
-                            radius = sphere_radius_from_volume(gas_volume)
-                        shape_params = {'radius': radius}
-                    except:
-                        shape_params = {'radius': 1.0}
-            
-            # Додаткова перевірка: якщо shape_code все ще не визначений, спробуємо з поточного вибору
-            if not shape_code:
-                try:
-                    shape_display = self.entries['shape_type'].get()
-                    shape_code = self.shape_display_to_code.get(shape_display, 'sphere')
-                except:
-                    shape_code = 'sphere'
+            shape_params = get_shape_params_from_sources(
+                shape_code=shape_code,
+                entries=self.entries,
+                last_calculation_results=last_results,
+                current_pattern=current_pattern
+            )
             
             # Логування для діагностики
             logging.info(f"3D візуалізація: shape_code={shape_code}, shape_params={shape_params}")
             
-            # Створюємо 3D візуалізацію (спочатку пробуємо Plotly, потім matplotlib)
+            # Створюємо 3D візуалізацію
             self._create_3d_visualization(shape_code, shape_params)
             
         except Exception as e:
-            import logging
             logging.error(f"Помилка 3D візуалізації: {e}", exc_info=True)
             messagebox.showerror("Помилка", f"Не вдалося створити 3D модель: {e}")
     
@@ -2941,10 +3164,7 @@ class BalloonCalculatorGUI:
         """Створює 3D візуалізацію кулі (спочатку пробує Plotly, потім matplotlib)"""
         # Спробуємо використати Plotly для інтерактивної візуалізації
         try:
-            try:
-                from balloon.gui.plotly_3d import create_3d_plotly, show_plotly_3d, is_plotly_available
-            except ImportError:
-                from gui.plotly_3d import create_3d_plotly, show_plotly_3d, is_plotly_available
+            from balloon.gui.plotly_3d import create_3d_plotly, show_plotly_3d, is_plotly_available
             
             if is_plotly_available():
                 results = None
@@ -2961,207 +3181,10 @@ class BalloonCalculatorGUI:
             logging.warning(f"Не вдалося використати Plotly, використовуємо matplotlib: {e}")
         
         # Fallback на matplotlib
-        try:
-            import numpy as np
-            from mpl_toolkits.mplot3d import Axes3D
-            
-            plt = get_plt()
-            fig = plt.figure(figsize=(12, 10))
-            ax = fig.add_subplot(111, projection='3d')
-            
-            # Налаштування темної теми
-            fig.patch.set_facecolor('#1e1e1e')
-            ax.set_facecolor('#1e1e1e')
-            ax.xaxis.pane.fill = False
-            ax.yaxis.pane.fill = False
-            ax.zaxis.pane.fill = False
-            ax.xaxis.pane.set_edgecolor('#333333')
-            ax.yaxis.pane.set_edgecolor('#333333')
-            ax.zaxis.pane.set_edgecolor('#333333')
-            ax.xaxis.label.set_color('#ffffff')
-            ax.yaxis.label.set_color('#ffffff')
-            ax.zaxis.label.set_color('#ffffff')
-            ax.tick_params(colors='#ffffff')
-            ax.grid(True, color='#444444', linestyle='--', alpha=0.3)
-            
-            if shape_code == 'sphere':
-                radius = shape_params.get('radius', 1.0)
-                u = np.linspace(0, 2 * np.pi, 50)
-                v = np.linspace(0, np.pi, 50)
-                x = radius * np.outer(np.cos(u), np.sin(v))
-                y = radius * np.outer(np.sin(u), np.sin(v))
-                z = radius * np.outer(np.ones(np.size(u)), np.cos(v))
-                ax.plot_surface(x, y, z, color='#4a90e2', alpha=0.7, edgecolor='#2a5a9a', linewidth=0.5)
-                ax.set_title(f'Сферична куля\nРадіус: {radius:.2f} м', color='#ffffff', fontsize=14, fontweight='bold')
-                
-            elif shape_code == 'pillow':
-                length = shape_params.get('pillow_len', 3.0)
-                width = shape_params.get('pillow_wid', 2.0)
-                # Товщина розраховується з об'єму (якщо є)
-                # Якщо є об'єм з останнього розрахунку, використовуємо його
-                if hasattr(self, 'last_calculation_results'):
-                    volume = self.last_calculation_results.get('required_volume', 0)
-                    if volume > 0:
-                        thickness = volume / (length * width)
-                    else:
-                        thickness = shape_params.get('thickness', width * 0.3)
-                else:
-                    thickness = shape_params.get('thickness', width * 0.3)
-                
-                # Подушка - еліпсоїдна форма (округла форма)
-                # Використовуємо параметризацію еліпсоїда
-                u = np.linspace(0, 2 * np.pi, 50)
-                v = np.linspace(0, np.pi, 50)
-                u_grid, v_grid = np.meshgrid(u, v)
-                
-                # Півосі еліпсоїда
-                a = length / 2  # Піввісь по X
-                b = width / 2   # Піввісь по Y
-                c = thickness / 2  # Піввісь по Z
-                
-                # Координати еліпсоїда
-                x = a * np.cos(u_grid) * np.sin(v_grid)
-                y = b * np.sin(u_grid) * np.sin(v_grid)
-                z = c * np.cos(v_grid)
-                
-                # Зсуваємо центр до початку координат
-                x = x - a + length / 2
-                y = y - b + width / 2
-                z = z - c + thickness / 2
-                
-                ax.plot_surface(x, y, z, color='#4a90e2', alpha=0.7, edgecolor='#2a5a9a', linewidth=0.5)
-                
-                ax.set_title(f'Подушкоподібна куля (надута)\nДовжина: {length:.2f} м, Ширина: {width:.2f} м, Товщина: {thickness:.2f} м', 
-                           color='#ffffff', fontsize=14, fontweight='bold')
-            
-            elif shape_code == 'pear':
-                height = shape_params.get('pear_height', 3.0)
-                top_radius = shape_params.get('pear_top_radius', 1.2)
-                bottom_radius = shape_params.get('pear_bottom_radius', 0.6)
-                
-                # Параметризація груші через обертання кривої
-                # Використовуємо лінійну інтерполяцію між top_radius та bottom_radius
-                u = np.linspace(0, 2 * np.pi, 50)
-                v = np.linspace(0, 1, 50)  # Від верху (0) до низу (1)
-                u_grid, v_grid = np.meshgrid(u, v)
-                
-                # Радіус на кожній висоті - лінійна інтерполяція
-                r_at_height = top_radius * (1 - v_grid) + bottom_radius * v_grid
-                
-                # Координати груші (обертання навколо осі Z)
-                x = r_at_height * np.cos(u_grid)
-                y = r_at_height * np.sin(u_grid)
-                z = height * v_grid  # Від низу (0) до верху (height)
-                
-                # Малюємо поверхню
-                ax.plot_surface(x, y, z, color='#4a90e2', alpha=0.7, edgecolor='#2a5a9a', linewidth=0.5)
-                
-                ax.set_title(f'Грушоподібна куля\nВисота: {height:.2f} м, Верхній радіус: {top_radius:.2f} м, Нижній радіус: {bottom_radius:.2f} м', 
-                           color='#ffffff', fontsize=14, fontweight='bold')
-            
-            elif shape_code == 'cigar':
-                length = shape_params.get('cigar_length', 5.0)
-                radius = shape_params.get('cigar_radius', 1.0)
-                
-                # Сигара = циліндр + дві півсфери
-                # Довжина циліндричної частини
-                cylinder_length = max(0, length - 2 * radius)
-                
-                # Параметризація для циліндричної частини (якщо вона є)
-                if cylinder_length > 0:
-                    u_cyl = np.linspace(0, 2 * np.pi, 50)
-                    z_cyl = np.linspace(radius, length - radius, 50)
-                    u_grid_cyl, z_grid_cyl = np.meshgrid(u_cyl, z_cyl)
-                    
-                    x_cyl = radius * np.cos(u_grid_cyl)
-                    y_cyl = radius * np.sin(u_grid_cyl)
-                    z_cyl = z_grid_cyl
-                    
-                    # Малюємо циліндричну частину
-                    ax.plot_surface(x_cyl, y_cyl, z_cyl, color='#4a90e2', alpha=0.7, edgecolor='#2a5a9a', linewidth=0.5)
-                
-                # Параметризація для півсферичних кінців
-                u = np.linspace(0, 2 * np.pi, 50)
-                v = np.linspace(0, np.pi / 2, 25)  # Тільки верхня півсфера
-                u_grid, v_grid = np.meshgrid(u, v)
-                
-                # Перший півсферичний кінець (знизу, y=0)
-                # Півсфера обертається навколо осі Z, центр на z=radius
-                x1 = radius * np.cos(u_grid) * np.sin(v_grid)
-                y1 = radius * np.sin(u_grid) * np.sin(v_grid)
-                z1 = radius * (1 - np.cos(v_grid))  # Від 0 до radius
-                ax.plot_surface(x1, y1, z1, color='#4a90e2', alpha=0.7, edgecolor='#2a5a9a', linewidth=0.5)
-                
-                # Другий півсферичний кінець (зверху, y=length)
-                # Півсфера обертається навколо осі Z, центр на z=length-radius
-                x2 = radius * np.cos(u_grid) * np.sin(v_grid)
-                y2 = radius * np.sin(u_grid) * np.sin(v_grid)
-                z2 = (length - radius) + radius * np.cos(v_grid)  # Від (length-radius) до length
-                ax.plot_surface(x2, y2, z2, color='#4a90e2', alpha=0.7, edgecolor='#2a5a9a', linewidth=0.5)
-                
-                ax.set_title(f'Сигароподібна куля\nДовжина: {length:.2f} м, Радіус: {radius:.2f} м', 
-                           color='#ffffff', fontsize=14, fontweight='bold')
-            
-            # Налаштування осей
-            ax.set_xlabel('X (м)', fontsize=10)
-            ax.set_ylabel('Y (м)', fontsize=10)
-            ax.set_zlabel('Z (м)', fontsize=10)
-            
-            # Встановлюємо масштаб для осей
-            if shape_code == 'sphere':
-                max_range = shape_params.get('radius', 1.0) * 1.2
-                ax.set_xlim([-max_range, max_range])
-                ax.set_ylim([-max_range, max_range])
-                ax.set_zlim([-max_range, max_range])
-            elif shape_code == 'pillow':
-                length = shape_params.get('pillow_len', 3.0)
-                width = shape_params.get('pillow_wid', 2.0)
-                if hasattr(self, 'last_calculation_results'):
-                    volume = self.last_calculation_results.get('required_volume', 0)
-                    if volume > 0:
-                        thickness = volume / (length * width)
-                    else:
-                        thickness = shape_params.get('thickness', width * 0.3)
-                else:
-                    thickness = shape_params.get('thickness', width * 0.3)
-                ax.set_xlim([0, length * 1.1])
-                ax.set_ylim([0, width * 1.1])
-                ax.set_zlim([0, thickness * 1.1])
-            elif shape_code == 'pear':
-                height = shape_params.get('pear_height', 3.0)
-                max_radius = max(shape_params.get('pear_top_radius', 1.2), shape_params.get('pear_bottom_radius', 0.6))
-                max_range = max(height, max_radius * 2) * 1.2
-                ax.set_xlim([-max_range, max_range])
-                ax.set_ylim([-max_range, max_range])
-                ax.set_zlim([0, height * 1.1])
-            elif shape_code == 'cigar':
-                length = shape_params.get('cigar_length', 5.0)
-                radius = shape_params.get('cigar_radius', 1.0)
-                max_range = max(length, radius * 2) * 1.2
-                ax.set_xlim([-max_range, max_range])
-                ax.set_ylim([-max_range, max_range])
-                ax.set_zlim([0, length * 1.1])
-            
-            # Додаємо інформацію про об'єм та площу
-            if hasattr(self, 'last_calculation_results'):
-                results = self.last_calculation_results
-                volume = results.get('required_volume', 0)
-                surface = results.get('surface_area', 0)
-                info_text = f"Об'єм: {volume:.2f} м³\nПлоща поверхні: {surface:.2f} м²"
-                ax.text2D(0.02, 0.98, info_text, transform=ax.transAxes, 
-                         fontsize=10, verticalalignment='top',
-                         bbox=dict(boxstyle='round', facecolor='#2b2b2b', alpha=0.8, edgecolor='#4a90e2'),
-                         color='#ffffff')
-            
-            plt.tight_layout()
-            plt.show()
-            
-        except ImportError:
-            messagebox.showerror("Помилка", "Для 3D візуалізації потрібна бібліотека numpy")
-        except Exception as e:
-            import logging
-            logging.error(f"Помилка 3D візуалізації: {e}", exc_info=True)
-            messagebox.showerror("Помилка", f"Не вдалося створити 3D модель: {e}")
+        last_results = getattr(self, 'last_calculation_results', None)
+        fig, ax = create_matplotlib_3d_fallback(shape_code, shape_params, last_results)
+        if fig is None:
+            messagebox.showerror("Помилка", "Не вдалося створити 3D модель через matplotlib")
 
 
 if __name__ == "__main__":

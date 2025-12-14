@@ -7,7 +7,7 @@ from typing import List, Dict, Any
 try:
     from balloon.analysis.base import _compute_lift_state
 except ImportError:
-    from analysis.base import _compute_lift_state
+    from balloon.analysis.base import _compute_lift_state
 
 
 def calculate_height_profile(gas_type: str, material: str, thickness_um: float,

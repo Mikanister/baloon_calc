@@ -56,7 +56,7 @@ docs = [
 ]
 
 [project.scripts]
-balloon-calculator = "balloon.main_improved:main"
+balloon-calculator = "balloon.__main__:main"
 
 [project.urls]
 Homepage = "https://github.com/yourusername/balloon-calculator"

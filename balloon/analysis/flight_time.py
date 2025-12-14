@@ -4,22 +4,11 @@
 
 from typing import Dict, Any
 
-try:
-    from balloon.constants import PERMEABILITY, MATERIALS, T0
-    from balloon.calculations import (
-        calculate_balloon_parameters,
-        air_density_at_height,
-        calculate_gas_density_at_altitude,
-        calculate_gas_loss,
-    )
-except ImportError:
-    from constants import PERMEABILITY, MATERIALS, T0
-    from calculations import (
-        calculate_balloon_parameters,
-        air_density_at_height,
-        calculate_gas_density_at_altitude,
-        calculate_gas_loss,
-    )
+from balloon.constants import PERMEABILITY, MATERIALS, T0
+from balloon.model.solve import solve_volume_to_payload, calculate_gas_loss
+from balloon.model.atmosphere import air_density_at_height
+from balloon.model.gas import calculate_gas_density_at_altitude
+from balloon.model.materials import get_material_permeability
 
 
 def calculate_max_flight_time(
@@ -68,7 +57,7 @@ def calculate_max_flight_time(
     total_height = start_height + work_height
     
     # Розрахунок початкових параметрів
-    initial_results = calculate_balloon_parameters(
+    initial_results = solve_volume_to_payload(
         gas_type=gas_type,
         gas_volume=gas_volume,
         material=material,
@@ -77,7 +66,6 @@ def calculate_max_flight_time(
         work_height=work_height,
         ground_temp=ground_temp,
         inside_temp=inside_temp,
-        mode="payload",
         duration=0,
         perm_mult=perm_mult,
         shape_type=shape_type,

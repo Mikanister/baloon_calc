@@ -3,6 +3,7 @@
 """
 
 import numpy as np
+from typing import Optional
 
 try:
     import plotly.graph_objects as go
@@ -12,7 +13,7 @@ except ImportError:
     PLOTLY_AVAILABLE = False
 
 
-def create_3d_plotly(shape_code: str, shape_params: dict, results: dict = None):
+def create_3d_plotly(shape_code: str, shape_params: dict, results: dict = None, num_segments: int = 50) -> Optional[str]:
     """
     Створює інтерактивну 3D візуалізацію через Plotly
     
@@ -20,6 +21,7 @@ def create_3d_plotly(shape_code: str, shape_params: dict, results: dict = None):
         shape_code: Код форми ('sphere', 'pillow', 'pear', 'cigar')
         shape_params: Параметри форми
         results: Результати розрахунку (опціонально)
+        num_segments: Параметр дискретизації (той самий що використовується в patterns)
     
     Returns:
         HTML рядок або None, якщо Plotly недоступний
@@ -38,27 +40,57 @@ def create_3d_plotly(shape_code: str, shape_params: dict, results: dict = None):
     
     fig = None
     
-    if shape_code == 'sphere':
-        fig = _create_sphere_plotly(shape_params, results)
-    elif shape_code == 'pillow':
-        fig = _create_pillow_plotly(shape_params, results)
-    elif shape_code == 'pear':
-        fig = _create_pear_plotly(shape_params, results)
-    elif shape_code == 'cigar':
-        fig = _create_cigar_plotly(shape_params, results)
-    else:
-        # Fallback на сферу, якщо форма не розпізнана
-        logging.warning(f"Невідома форма: {shape_code}, використовуємо сферу")
-        fig = _create_sphere_plotly(shape_params, results)
+    # Отримуємо підтримувані форми з реєстру
+    from balloon.shapes.registry import get_all_shape_codes
+    SUPPORTED_SHAPES = get_all_shape_codes()
+    
+    # Використовуємо реєстр для перевірки підтримки форми
+    from balloon.shapes.registry import get_shape_entry
+    entry = get_shape_entry(shape_code)
+    
+    if entry is None:
+        # Форма не підтримується - показуємо повідомлення замість "лівої" моделі
+        logging.warning(f"Форма '{shape_code}' не підтримується в 3D візуалізації")
+        fig = _create_unsupported_shape_message(shape_code, SUPPORTED_SHAPES)
+        # Для непідтримуваних форм не додаємо стандартний макет
+        return fig
+    
+    # Викликаємо відповідну функцію створення 3D моделі
+    # Примітка: тут залишаємо if/elif, оскільки це специфічна логіка візуалізації
+    # Але форма вже перевірена через реєстр
+    # Всі rotational shapes використовують profile-based mesh з однаковим параметром дискретизації
+    try:
+        if shape_code == 'sphere':
+            fig = _create_sphere_plotly(shape_params, results, num_segments)
+        elif shape_code == 'pillow':
+            # Pillow не є rotational shape, тому не використовує profile
+            fig = _create_pillow_plotly(shape_params, results)
+        elif shape_code == 'pear':
+            fig = _create_pear_plotly(shape_params, results, num_segments)
+        elif shape_code == 'cigar':
+            fig = _create_cigar_plotly(shape_params, results, num_segments)
+        else:
+            # Це не повинно статися, якщо реєстр працює правильно
+            logging.error(f"Форма '{shape_code}' є в реєстрі, але не має 3D візуалізації")
+            fig = _create_unsupported_shape_message(shape_code, SUPPORTED_SHAPES)
+            return fig
+    except ValueError as e:
+        # Якщо не вдалося створити профіль, показуємо повідомлення
+        logging.error(f"Помилка створення 3D моделі: {e}")
+        fig = _create_unsupported_shape_message(shape_code, SUPPORTED_SHAPES)
+        return fig
     
     if fig is None:
-        logging.error("Не вдалося створити фігуру, використовуємо сферу за замовчуванням")
-        fig = _create_sphere_plotly({'radius': 1.0}, results)
+        logging.error("Не вдалося створити фігуру")
+        fig = _create_unsupported_shape_message(shape_code or 'unknown', SUPPORTED_SHAPES)
+        return fig
     
     # Налаштування макету
+    title_text = f'3D Модель: {shape_code}'
+    
     fig.update_layout(
         title={
-            'text': f'3D Модель: {shape_code}',
+            'text': title_text,
             'x': 0.5,
             'xanchor': 'center',
             'font': {'size': 20, 'color': 'white'}
@@ -112,29 +144,37 @@ def create_3d_plotly(shape_code: str, shape_params: dict, results: dict = None):
     return fig
 
 
-def _create_sphere_plotly(shape_params: dict, results: dict = None):
-    """Створює 3D сферу через Plotly"""
-    radius = shape_params.get('radius', 1.0)
+def _create_sphere_plotly(shape_params: dict, results: dict = None, num_segments: int = 50):
+    """Створює 3D сферу через Plotly з profile-based mesh (центр у 0)"""
+    from balloon.shapes.profile import get_shape_profile
     
-    u = np.linspace(0, 2 * np.pi, 50)
-    v = np.linspace(0, np.pi, 50)
-    x = radius * np.outer(np.cos(u), np.sin(v))
-    y = radius * np.outer(np.sin(u), np.sin(v))
-    z = radius * np.outer(np.ones(np.size(u)), np.cos(v))
+    # Отримуємо профіль через реєстр
+    profile = get_shape_profile('sphere', shape_params)
+    if profile is None:
+        import logging
+        logging.error("Не вдалося створити профіль для сфери")
+        raise ValueError("Не вдалося створити профіль для форми 'sphere'")
+    
+    # Покращена якість mesh: більше точок для кращої візуалізації
+    enhanced_num_segments = max(num_segments, 60)  # Мінімум 60 для кращої якості
+    x, y, z = profile.generate_mesh(num_theta=enhanced_num_segments, num_z=enhanced_num_segments, center_at_origin=True)
     
     fig = go.Figure(data=[go.Surface(
         x=x, y=y, z=z,
         colorscale='Blues',
         showscale=False,
-        opacity=0.8,
+        opacity=0.85,
         lighting=dict(
-            ambient=0.4,
-            diffuse=0.8,
-            specular=0.2,
-            roughness=0.5
-        )
+            ambient=0.5,
+            diffuse=0.9,
+            specular=0.3,
+            roughness=0.4,
+            fresnel=0.5
+        ),
+        lightposition=dict(x=100, y=100, z=100)
     )])
     
+    radius = shape_params.get('radius', 1.0)
     fig.update_layout(
         title=f'Сферична куля<br>Радіус: {radius:.2f} м'
     )
@@ -143,7 +183,7 @@ def _create_sphere_plotly(shape_params: dict, results: dict = None):
 
 
 def _create_pillow_plotly(shape_params: dict, results: dict = None):
-    """Створює 3D подушку (еліпсоїд) через Plotly"""
+    """Створює 3D подушку (паралелепіпед/box) через Plotly - відповідає V=L*W*H"""
     length = shape_params.get('pillow_len', 3.0)
     width = shape_params.get('pillow_wid', 2.0)
     
@@ -157,75 +197,110 @@ def _create_pillow_plotly(shape_params: dict, results: dict = None):
     else:
         thickness = shape_params.get('thickness', width * 0.3)
     
-    # Півосі еліпсоїда
-    a = length / 2
-    b = width / 2
-    c = thickness / 2
+    # Створюємо паралелепіпед (box) з центром у (0,0,0)
+    # Координати вершин
+    l2 = length / 2
+    w2 = width / 2
+    t2 = thickness / 2
     
-    u = np.linspace(0, 2 * np.pi, 50)
-    v = np.linspace(0, np.pi, 50)
-    u_grid, v_grid = np.meshgrid(u, v)
+    # Вершини паралелепіпеда
+    vertices = np.array([
+        [-l2, -w2, -t2], [l2, -w2, -t2], [l2, w2, -t2], [-l2, w2, -t2],  # Нижня грань
+        [-l2, -w2, t2], [l2, -w2, t2], [l2, w2, t2], [-l2, w2, t2]        # Верхня грань
+    ])
     
-    x = a * np.cos(u_grid) * np.sin(v_grid)
-    y = b * np.sin(u_grid) * np.sin(v_grid)
-    z = c * np.cos(v_grid)
+    # Створюємо поверхню через mesh для кожної грані
+    fig = go.Figure()
     
-    # Зсуваємо центр
-    x = x - a + length / 2
-    y = y - b + width / 2
-    z = z - c + thickness / 2
+    # Нижня грань (z = -t2)
+    x_bottom = np.array([[-l2, l2], [-l2, l2]])
+    y_bottom = np.array([[-w2, -w2], [w2, w2]])
+    z_bottom = np.array([[-t2, -t2], [-t2, -t2]])
+    fig.add_trace(go.Surface(x=x_bottom, y=y_bottom, z=z_bottom, 
+                            colorscale='Blues', showscale=False, opacity=0.8))
     
-    fig = go.Figure(data=[go.Surface(
-        x=x, y=y, z=z,
-        colorscale='Blues',
-        showscale=False,
-        opacity=0.8,
-        lighting=dict(
-            ambient=0.4,
-            diffuse=0.8,
-            specular=0.2,
-            roughness=0.5
-        )
-    )])
+    # Верхня грань (z = t2)
+    x_top = np.array([[-l2, l2], [-l2, l2]])
+    y_top = np.array([[-w2, -w2], [w2, w2]])
+    z_top = np.array([[t2, t2], [t2, t2]])
+    fig.add_trace(go.Surface(x=x_top, y=y_top, z=z_top, 
+                            colorscale='Blues', showscale=False, opacity=0.8))
+    
+    # Бічні грані
+    # Передня (y = w2)
+    x_front = np.array([[-l2, l2], [-l2, l2]])
+    y_front = np.array([[w2, w2], [w2, w2]])
+    z_front = np.array([[-t2, -t2], [t2, t2]])
+    fig.add_trace(go.Surface(x=x_front, y=y_front, z=z_front, 
+                            colorscale='Blues', showscale=False, opacity=0.8))
+    
+    # Задня (y = -w2)
+    x_back = np.array([[-l2, l2], [-l2, l2]])
+    y_back = np.array([[-w2, -w2], [-w2, -w2]])
+    z_back = np.array([[-t2, -t2], [t2, t2]])
+    fig.add_trace(go.Surface(x=x_back, y=y_back, z=z_back, 
+                            colorscale='Blues', showscale=False, opacity=0.8))
+    
+    # Ліва (x = -l2)
+    x_left = np.array([[-l2, -l2], [-l2, -l2]])
+    y_left = np.array([[-w2, w2], [-w2, w2]])
+    z_left = np.array([[-t2, -t2], [t2, t2]])
+    fig.add_trace(go.Surface(x=x_left, y=y_left, z=z_left, 
+                            colorscale='Blues', showscale=False, opacity=0.8))
+    
+    # Права (x = l2)
+    x_right = np.array([[l2, l2], [l2, l2]])
+    y_right = np.array([[-w2, w2], [-w2, w2]])
+    z_right = np.array([[-t2, -t2], [t2, t2]])
+    fig.add_trace(go.Surface(x=x_right, y=y_right, z=z_right, 
+                            colorscale='Blues', showscale=False, opacity=0.8))
     
     fig.update_layout(
-        title=f'Подушкоподібна куля<br>Довжина: {length:.2f} м, Ширина: {width:.2f} м, Товщина: {thickness:.2f} м'
+        title=f'Подушкоподібна куля (паралелепіпед)<br>Довжина: {length:.2f} м, Ширина: {width:.2f} м, Товщина: {thickness:.2f} м'
     )
     
     return fig
 
 
-def _create_pear_plotly(shape_params: dict, results: dict = None):
-    """Створює 3D грушу через Plotly"""
-    height = shape_params.get('pear_height', 3.0)
-    top_radius = shape_params.get('pear_top_radius', 1.2)
-    bottom_radius = shape_params.get('pear_bottom_radius', 0.6)
+def _create_pear_plotly(shape_params: dict, results: dict = None, num_segments: int = 50):
+    """Створює 3D грушу через Plotly з profile-based mesh"""
+    from balloon.shapes.profile import get_shape_profile
     
-    u = np.linspace(0, 2 * np.pi, 50)
-    v = np.linspace(0, 1, 50)
-    u_grid, v_grid = np.meshgrid(u, v)
+    # Отримуємо профіль через реєстр
+    profile = get_shape_profile('pear', shape_params)
+    if profile is None:
+        import logging
+        logging.error("Не вдалося створити профіль для груші")
+        raise ValueError("Не вдалося створити профіль для форми 'pear'")
     
-    # Радіус на кожній висоті - лінійна інтерполяція
-    r_at_height = top_radius * (1 - v_grid) + bottom_radius * v_grid
-    
-    # Координати груші
-    x = r_at_height * np.cos(u_grid)
-    y = r_at_height * np.sin(u_grid)
-    z = height * v_grid
+    # Покращена якість mesh: більше точок для кращої візуалізації
+    enhanced_num_segments = max(num_segments, 60)  # Мінімум 60 для кращої якості
+    x, y, z = profile.generate_mesh(num_theta=enhanced_num_segments, num_z=enhanced_num_segments, center_at_origin=True)
     
     fig = go.Figure(data=[go.Surface(
         x=x, y=y, z=z,
         colorscale='Blues',
         showscale=False,
-        opacity=0.8,
+        opacity=0.85,
         lighting=dict(
-            ambient=0.4,
-            diffuse=0.8,
-            specular=0.2,
-            roughness=0.5
-        )
+            ambient=0.5,
+            diffuse=0.9,
+            specular=0.3,
+            roughness=0.4,
+            fresnel=0.5
+        ),
+        lightposition=dict(x=100, y=100, z=100)
     )])
     
+    # Додаємо gore overlay (межі сегментів) якщо є інформація про кількість сегментів
+    # Це допомагає візуалізувати, як викрійка відповідає 3D моделі
+    num_gores = shape_params.get('num_gores', 12)
+    if num_gores > 0:
+        _add_gore_overlay_to_fig(fig, x, y, z, num_gores)
+    
+    height = shape_params.get('pear_height', 3.0)
+    top_radius = shape_params.get('pear_top_radius', 1.2)
+    bottom_radius = shape_params.get('pear_bottom_radius', 0.6)
     fig.update_layout(
         title=f'Грушоподібна куля<br>Висота: {height:.2f} м, Верхній радіус: {top_radius:.2f} м, Нижній радіус: {bottom_radius:.2f} м'
     )
@@ -233,78 +308,43 @@ def _create_pear_plotly(shape_params: dict, results: dict = None):
     return fig
 
 
-def _create_cigar_plotly(shape_params: dict, results: dict = None):
-    """Створює 3D сигару через Plotly"""
+def _create_cigar_plotly(shape_params: dict, results: dict = None, num_segments: int = 50):
+    """Створює 3D сигару через Plotly з profile-based mesh"""
+    from balloon.shapes.profile import get_shape_profile
+    
+    # Отримуємо профіль через реєстр
+    profile = get_shape_profile('cigar', shape_params)
+    if profile is None:
+        import logging
+        logging.error("Не вдалося створити профіль для сигари")
+        raise ValueError("Не вдалося створити профіль для форми 'cigar'")
+    
+    # Покращена якість mesh: більше точок для кращої візуалізації
+    enhanced_num_segments = max(num_segments, 60)  # Мінімум 60 для кращої якості
+    x, y, z = profile.generate_mesh(num_theta=enhanced_num_segments, num_z=enhanced_num_segments, center_at_origin=True)
+    
+    fig = go.Figure(data=[go.Surface(
+        x=x, y=y, z=z,
+        colorscale='Blues',
+        showscale=False,
+        opacity=0.85,
+        lighting=dict(
+            ambient=0.5,
+            diffuse=0.9,
+            specular=0.3,
+            roughness=0.4,
+            fresnel=0.5
+        ),
+        lightposition=dict(x=100, y=100, z=100)
+    )])
+    
+    # Додаємо gore overlay (межі сегментів)
+    num_gores = shape_params.get('num_gores', 12)
+    if num_gores > 0:
+        _add_gore_overlay_to_fig(fig, x, y, z, num_gores)
+    
     length = shape_params.get('cigar_length', 5.0)
     radius = shape_params.get('cigar_radius', 1.0)
-    
-    fig = go.Figure()
-    
-    # Циліндрична частина
-    cylinder_length = max(0, length - 2 * radius)
-    if cylinder_length > 0:
-        u_cyl = np.linspace(0, 2 * np.pi, 50)
-        z_cyl = np.linspace(radius, length - radius, 50)
-        u_grid_cyl, z_grid_cyl = np.meshgrid(u_cyl, z_cyl)
-        
-        x_cyl = radius * np.cos(u_grid_cyl)
-        y_cyl = radius * np.sin(u_grid_cyl)
-        z_cyl = z_grid_cyl
-        
-        fig.add_trace(go.Surface(
-            x=x_cyl, y=y_cyl, z=z_cyl,
-            colorscale='Blues',
-            showscale=False,
-            opacity=0.8,
-            lighting=dict(
-                ambient=0.4,
-                diffuse=0.8,
-                specular=0.2,
-                roughness=0.5
-            )
-        ))
-    
-    # Півсферичні кінці
-    u = np.linspace(0, 2 * np.pi, 50)
-    v = np.linspace(0, np.pi / 2, 25)
-    u_grid, v_grid = np.meshgrid(u, v)
-    
-    # Нижній кінець
-    x1 = radius * np.cos(u_grid) * np.sin(v_grid)
-    y1 = radius * np.sin(u_grid) * np.sin(v_grid)
-    z1 = radius * (1 - np.cos(v_grid))
-    
-    fig.add_trace(go.Surface(
-        x=x1, y=y1, z=z1,
-        colorscale='Blues',
-        showscale=False,
-        opacity=0.8,
-        lighting=dict(
-            ambient=0.4,
-            diffuse=0.8,
-            specular=0.2,
-            roughness=0.5
-        )
-    ))
-    
-    # Верхній кінець
-    x2 = radius * np.cos(u_grid) * np.sin(v_grid)
-    y2 = radius * np.sin(u_grid) * np.sin(v_grid)
-    z2 = (length - radius) + radius * np.cos(v_grid)
-    
-    fig.add_trace(go.Surface(
-        x=x2, y=y2, z=z2,
-        colorscale='Blues',
-        showscale=False,
-        opacity=0.8,
-        lighting=dict(
-            ambient=0.4,
-            diffuse=0.8,
-            specular=0.2,
-            roughness=0.5
-        )
-    ))
-    
     fig.update_layout(
         title=f'Сигароподібна куля<br>Довжина: {length:.2f} м, Радіус: {radius:.2f} м'
     )
@@ -331,7 +371,84 @@ def show_plotly_3d(fig, save_html: bool = False, filename: str = None):
         fig.show()
 
 
+def _create_unsupported_shape_message(shape_code: str, supported_shapes: list):
+    """Створює повідомлення про непідтримувану форму"""
+    fig = go.Figure()
+    
+    # Додаємо текст повідомлення
+    fig.add_annotation(
+        text=f"3D візуалізація недоступна для форми '{shape_code}'<br><br>"
+             f"Підтримувані форми: {', '.join(supported_shapes)}",
+        xref="paper", yref="paper",
+        x=0.5, y=0.5,
+        xanchor="center", yanchor="middle",
+        font=dict(size=16, color='white'),
+        bgcolor="rgba(40, 40, 40, 0.9)",
+        bordercolor="rgb(200, 50, 50)",
+        borderwidth=2,
+        showarrow=False
+    )
+    
+    fig.update_layout(
+        scene=dict(
+            xaxis=dict(visible=False),
+            yaxis=dict(visible=False),
+            zaxis=dict(visible=False),
+            bgcolor='rgb(20, 20, 20)',
+        ),
+        paper_bgcolor='rgb(30, 30, 30)',
+        plot_bgcolor='rgb(20, 20, 20)',
+    )
+    
+    return fig
+
+
 def is_plotly_available():
     """Перевіряє, чи доступний Plotly"""
     return PLOTLY_AVAILABLE
+
+
+def _add_gore_overlay_to_fig(fig, x, y, z, num_gores):
+    """
+    Додає overlay з межами сегментів (gores) на 3D модель
+    
+    Це допомагає візуалізувати, як викрійка відповідає 3D моделі
+    """
+    if not PLOTLY_AVAILABLE:
+        return
+    
+    # Обчислюємо кути для меж сегментів
+    theta_step = 2 * np.pi / num_gores
+    
+    # Для кожної межі сегмента малюємо лінію від низу до верху
+    num_z_points = z.shape[1]
+    
+    for i in range(num_gores):
+        theta = i * theta_step
+        
+        # Знаходимо найближчі точки по theta
+        theta_idx = int(theta / (2 * np.pi) * x.shape[0])
+        if theta_idx >= x.shape[0]:
+            theta_idx = x.shape[0] - 1
+        
+        # Створюємо лінію вздовж меридіану
+        x_line = []
+        y_line = []
+        z_line = []
+        
+        for j in range(num_z_points):
+            x_line.append(x[theta_idx, j])
+            y_line.append(y[theta_idx, j])
+            z_line.append(z[theta_idx, j])
+        
+        # Додаємо лінію до фігури
+        fig.add_trace(go.Scatter3d(
+            x=x_line,
+            y=y_line,
+            z=z_line,
+            mode='lines',
+            line=dict(color='rgba(255, 100, 100, 0.6)', width=2),
+            showlegend=False,
+            hoverinfo='skip'
+        ))
 

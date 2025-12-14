@@ -2,7 +2,7 @@
 Валідація введених даних
 """
 
-from typing import Union, Tuple
+from typing import Union, Tuple, Optional
 
 from balloon.constants import MATERIALS, GAS_DENSITY
 from balloon.models import BalloonInputs, ShapeParams
@@ -122,46 +122,57 @@ def validate_height_parameters(start_height: float, work_height: float) -> None:
 
 def validate_shape_params(shape_type: str, params: dict) -> dict:
     """
-    Валідує параметри форми та повертає float-значення.
+    Валідує параметри форми та повертає float-значення через Shape Registry.
     Параметри опціональні - якщо не задані, розраховуються на основі об'єму.
     """
-    if shape_type not in ("sphere", "pillow", "pear", "cigar"):
+    from balloon.shapes.registry import validate_shape_params as registry_validate, get_shape_entry
+    
+    # Перевіряємо, чи форма підтримується
+    entry = get_shape_entry(shape_type)
+    if entry is None:
         raise ValidationError(f"Непідтримувана форма: {shape_type}")
+    
+    # Використовуємо реєстр для валідації через Pydantic
+    try:
+        validated = registry_validate(shape_type, params)
+        return validated
+    except Exception as e:
+        # Якщо валідація через реєстр не вдалася (наприклад, некоректні типи),
+        # використовуємо простий спосіб валідації як fallback
+        def optional(key: str, label: str, min_value: float = 0.0001) -> Optional[float]:
+            """Валідує опціональне поле форми"""
+            if key not in params or params[key] is None or str(params[key]).strip() == "":
+                return None
+            return validate_float(str(params[key]), label, min_value=min_value)
 
-    def optional(key: str, label: str, min_value: float = 0.0001) -> float:
-        """Валідує опціональне поле форми"""
-        if key not in params or params[key] is None or str(params[key]).strip() == "":
-            return None
-        return validate_float(str(params[key]), label, min_value=min_value)
-
-    out = {}
-    if shape_type == "sphere":
+        out = {}
+        if shape_type == "sphere":
+            return out
+        elif shape_type == "pillow":
+            L = optional("pillow_len", "Довжина подушки")
+            W = optional("pillow_wid", "Ширина подушки")
+            if L is not None:
+                out["pillow_len"] = L
+            if W is not None:
+                out["pillow_wid"] = W
+        elif shape_type == "pear":
+            H = optional("pear_height", "Висота груші")
+            R_top = optional("pear_top_radius", "Радіус верхньої частини груші")
+            R_bottom = optional("pear_bottom_radius", "Радіус нижньої частини груші")
+            if H is not None:
+                out["pear_height"] = H
+            if R_top is not None:
+                out["pear_top_radius"] = R_top
+            if R_bottom is not None:
+                out["pear_bottom_radius"] = R_bottom
+        elif shape_type == "cigar":
+            L = optional("cigar_length", "Довжина сигари")
+            R = optional("cigar_radius", "Радіус сигари")
+            if L is not None:
+                out["cigar_length"] = L
+            if R is not None:
+                out["cigar_radius"] = R
         return out
-    elif shape_type == "pillow":
-        L = optional("pillow_len", "Довжина подушки")
-        W = optional("pillow_wid", "Ширина подушки")
-        if L is not None:
-            out["pillow_len"] = L
-        if W is not None:
-            out["pillow_wid"] = W
-    elif shape_type == "pear":
-        H = optional("pear_height", "Висота груші")
-        R_top = optional("pear_top_radius", "Радіус верхньої частини груші")
-        R_bottom = optional("pear_bottom_radius", "Радіус нижньої частини груші")
-        if H is not None:
-            out["pear_height"] = H
-        if R_top is not None:
-            out["pear_top_radius"] = R_top
-        if R_bottom is not None:
-            out["pear_bottom_radius"] = R_bottom
-    elif shape_type == "cigar":
-        L = optional("cigar_length", "Довжина сигари")
-        R = optional("cigar_radius", "Радіус сигари")
-        if L is not None:
-            out["cigar_length"] = L
-        if R is not None:
-            out["cigar_radius"] = R
-    return out
 
 
 def validate_all_inputs(
@@ -184,7 +195,7 @@ def validate_all_inputs(
     Валідує всі введені дані
     
     Використовує Pydantic моделі для валідації, якщо доступні.
-    Інакше використовує стару реалізацію для зворотної сумісності.
+    Інакше використовує просту реалізацію валідації.
     
     Args:
         gas_type: Тип газу

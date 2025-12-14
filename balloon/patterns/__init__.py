@@ -2,32 +2,22 @@
 Модуль для розрахунку викрійок/патернів
 """
 
-# Експортуємо функції з окремих модулів
-try:
-    from balloon.patterns.sphere_pattern import calculate_sphere_gore_pattern
-    from balloon.patterns.pillow_pattern import calculate_pillow_pattern
-    from balloon.patterns.pear_pattern import calculate_pear_pattern
-    from balloon.patterns.cigar_pattern import calculate_cigar_pattern
-    from balloon.patterns.base import (
-        generate_pattern_from_shape,
-        calculate_seam_length
-    )
-except ImportError:
-    from patterns.sphere_pattern import calculate_sphere_gore_pattern
-    from patterns.pillow_pattern import calculate_pillow_pattern
-    from patterns.pear_pattern import calculate_pear_pattern
-    from patterns.cigar_pattern import calculate_cigar_pattern
-    from patterns.base import (
-        generate_pattern_from_shape,
-        calculate_seam_length
-    )
+# Основні функції
+from balloon.patterns.base import (
+    generate_pattern_from_shape,  # Тільки для pillow
+    calculate_seam_length
+)
+
+# Метод на основі профілів (для sphere/pear/cigar)
+from balloon.patterns.profile_based import generate_pattern_from_shape_profile
+
+# Pillow pattern
+from balloon.patterns.pillow_pattern import calculate_pillow_pattern
 
 __all__ = [
-    'calculate_sphere_gore_pattern',
-    'calculate_pillow_pattern',
-    'calculate_pear_pattern',
-    'calculate_cigar_pattern',
-    'generate_pattern_from_shape',
+    'generate_pattern_from_shape',  # Тільки для pillow
+    'generate_pattern_from_shape_profile',  # Для sphere/pear/cigar
     'calculate_seam_length',
+    'calculate_pillow_pattern',
 ]
 

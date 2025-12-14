@@ -4,10 +4,7 @@
 
 from typing import Dict, Any
 
-try:
-    from balloon.analysis.base import _compute_lift_state
-except ImportError:
-    from analysis.base import _compute_lift_state
+from balloon.analysis.base import _compute_lift_state
 
 
 def calculate_optimal_height(gas_type: str, material: str, thickness_um: float, 

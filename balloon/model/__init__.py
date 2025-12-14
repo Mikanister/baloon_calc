@@ -24,6 +24,20 @@ from balloon.model.solve import (
     solve_payload_to_volume,
     calculate_balloon_state
 )
+from balloon.model.assumptions import (
+    get_all_assumptions,
+    get_assumptions_by_category,
+    get_assumptions_dict,
+    get_assumptions_table_data,
+    AssumptionCategory,
+    PhysicalAssumption
+)
+from balloon.model.mass_budget import (
+    MassBudget,
+    LiftBudget,
+    calculate_mass_budget,
+    calculate_lift_budget
+)
 
 __all__ = [
     'air_density_at_height',
@@ -40,5 +54,17 @@ __all__ = [
     'solve_volume_to_payload',
     'solve_payload_to_volume',
     'calculate_balloon_state',
+    # Assumptions
+    'get_all_assumptions',
+    'get_assumptions_by_category',
+    'get_assumptions_dict',
+    'get_assumptions_table_data',
+    'AssumptionCategory',
+    'PhysicalAssumption',
+    # Mass & Lift Budget
+    'MassBudget',
+    'LiftBudget',
+    'calculate_mass_budget',
+    'calculate_lift_budget',
 ]
 

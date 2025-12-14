@@ -32,8 +32,7 @@ class BalloonSettings(BaseSettings):
     model_config = SettingsConfigDict(
         env_file=".env",
         env_file_encoding="utf-8",
-        json_file="balloon_settings.json",
-        json_file_encoding="utf-8",
+        # json_file та json_file_encoding видалено, бо використовуємо власні методи save_to_file/load_from_file
         case_sensitive=False,
         extra="ignore"
     )
@@ -72,14 +71,37 @@ class BalloonSettings(BaseSettings):
     def save_to_file(self, filename: str = "balloon_settings.json"):
         """Зберігає налаштування у файл"""
         import json
-        with open(filename, 'w', encoding='utf-8') as f:
+        import sys
+        import os
+        
+        # Визначаємо шлях для налаштувань (в exe режимі використовуємо папку з exe)
+        if getattr(sys, 'frozen', False):
+            settings_path = os.path.join(os.path.dirname(sys.executable), filename)
+        else:
+            settings_path = filename
+            
+        with open(settings_path, 'w', encoding='utf-8') as f:
             json.dump(self.to_dict(), f, ensure_ascii=False, indent=2)
     
     @classmethod
     def load_from_file(cls, filename: str = "balloon_settings.json") -> "BalloonSettings":
         """Завантажує налаштування з файлу"""
         import os
-        if os.path.exists(filename):
-            return cls(_env_file=filename)
+        import sys
+        import json
+        
+        # Визначаємо шлях для налаштувань (в exe режимі використовуємо папку з exe)
+        if getattr(sys, 'frozen', False):
+            settings_path = os.path.join(os.path.dirname(sys.executable), filename)
+        else:
+            settings_path = filename
+            
+        if os.path.exists(settings_path):
+            try:
+                with open(settings_path, 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+                return cls(**data)
+            except Exception:
+                return cls()
         return cls()
 

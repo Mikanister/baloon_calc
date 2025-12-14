@@ -2,12 +2,15 @@
 Аналіз вартості матеріалів
 """
 
+import logging
 from typing import Dict
 
 try:
     from balloon.analysis.base import _compute_lift_state
 except ImportError:
-    from analysis.base import _compute_lift_state
+    from balloon.analysis.base import _compute_lift_state
+
+logger = logging.getLogger(__name__)
 
 
 def calculate_cost_analysis(material: str, thickness_um: float, gas_volume: float,
@@ -76,8 +79,9 @@ def calculate_cost_analysis(material: str, thickness_um: float, gas_volume: floa
                 'cost_per_kg_payload': total_cost / max(0.001, state['lift'] - state['mass_shell'])
             }
             
-    except Exception:
-        pass
+    except Exception as e:
+        logger.warning(f"Помилка розрахунку вартості: {e}", exc_info=True)
+        # Повертаємо значення за замовчуванням при помилці
     
     return {
         'material_cost': 0,

@@ -34,15 +34,15 @@ class TestCalculateOptimalHeight:
     
     def test_optimal_height_with_shapes(self):
         """Перевірка оптимальної висоти з різними формами"""
-        # Циліндр
+        # Груша
         result = calculate_optimal_height(
             gas_type="Гелій",
             material="TPU",
             thickness_um=35,
             gas_volume=10,
             ground_temp=15,
-            shape_type="cylinder",
-            shape_params={"cyl_radius": 1.0}
+            shape_type="pear",
+            shape_params={"pear_height": 3.0, "pear_top_radius": 1.2, "pear_bottom_radius": 0.6}
         )
         assert result['height'] >= 0
         assert result['payload'] > 0

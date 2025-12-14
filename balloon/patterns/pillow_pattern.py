@@ -4,10 +4,7 @@
 
 from typing import Dict, Any
 
-try:
-    from balloon.shapes import pillow_surface_area
-except ImportError:
-    from shapes import pillow_surface_area
+from balloon.shapes import pillow_surface_area
 
 
 def calculate_pillow_pattern(length: float, width: float, thickness: float = None) -> Dict[str, Any]:
